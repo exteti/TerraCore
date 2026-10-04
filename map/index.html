@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/rbush@3.0.1/rbush.min.js"></script>
 
 <style>
 :root{
@@ -132,6 +133,10 @@ body[data-tool="brush"] .brushOnly{display:block}
 .brushOnly label{display:flex;justify-content:space-between;font-size:12px;color:var(--mute);margin-bottom:6px}
 .brushOnly output{color:var(--ink);font-variant-numeric:tabular-nums}
 input[type=range]{width:100%;accent-color:var(--fc)}
+.grayZoneControl{margin-top:12px}
+.grayZoneControl label{display:flex;justify-content:space-between;gap:8px;font-size:12px;line-height:1.35;color:var(--mute);margin-bottom:6px}
+.grayZoneControl output{flex:none;color:var(--ink);font-variant-numeric:tabular-nums}
+.grayZoneControl input{accent-color:#92999f}
 
 /* ---------- Подсказки, баннер, загрузка ---------- */
 #toast{
@@ -545,6 +550,10 @@ body[data-theme="light"] .leaflet-control-scale-line{background:rgba(255,255,255
     <label for="brushSize">Размер кисти <output id="brushOut">28</output></label>
     <input type="range" id="brushSize" min="8" max="80" step="1" value="28">
   </div>
+  <div class="grayZoneControl">
+    <label for="grayWidth">Ширина серой зоны (км) <output id="grayWidthOut">5 км</output></label>
+    <input type="range" id="grayWidth" min="0" max="50" step="1" value="5" aria-label="Ширина серой зоны в километрах">
+  </div>
 
   <div class="sep"></div>
   <div class="grid3">
@@ -610,7 +619,7 @@ const MAX_COUNTRIES = 8;
 
 const MAX_HISTORY    = 40;
 const MIN_CAPTURE_KM2 = 0.05;
-const ANIM_MS        = 900;
+const ANIM_MS        = 1500;
 
 // Источники границ: сначала детальные 10m, при неудаче — упрощённые 50m
 const NE = 'nvkelso/natural-earth-vector';
@@ -626,10 +635,74 @@ const CATALOG_KEY = 'catalog-v1';   // список стран для поиск
 const FRONT_BOUNDS = [[43.5, 22], [54, 45]];   // Украина и ближние области России
 const nf = new Intl.NumberFormat('ru-RU', {maximumFractionDigits:0});
 const pf = new Intl.NumberFormat('ru-RU', {minimumFractionDigits:1, maximumFractionDigits:1});
+const grayPf = new Intl.NumberFormat('ru-RU', {minimumFractionDigits:2, maximumFractionDigits:2});
 
 const fc = list => turf.featureCollection(list.filter(Boolean));
 const areaKm2 = x => { try{ return x ? turf.area(x)/1e6 : 0; }catch(_){ return 0; } };
 const nextFrame = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+
+let geometryWorker=null;
+let geometryWorkerId=0;
+const geometryWorkerPending=new Map();
+const GEOMETRY_WORKER_TIMEOUT_MS=30000;
+if(typeof Worker!=='undefined'&&location.protocol!=='file:'){
+  try{
+    geometryWorker=new Worker(new URL('./geometry-worker.js',location.href));
+    geometryWorker.onmessage=event=>{
+      const request=geometryWorkerPending.get(event.data.id);
+      if(!request) return;
+      geometryWorkerPending.delete(event.data.id);
+      clearTimeout(request.timer);
+      if(event.data.error) request.reject(new Error(event.data.error));
+      else request.resolve(event.data.result);
+    };
+    geometryWorker.onerror=event=>{
+      console.warn('Geometry worker недоступен, используем основной поток',event.message);
+      geometryWorker.terminate();
+      geometryWorker=null;
+      for(const request of geometryWorkerPending.values()){
+        clearTimeout(request.timer);
+        request.reject(new Error(event.message||'Worker failed'));
+      }
+      geometryWorkerPending.clear();
+    };
+  }catch(err){
+    console.warn('Не удалось создать geometry worker',err);
+    geometryWorker=null;
+  }
+}
+
+function requestGeometryWorker(type,payload){
+  return new Promise((resolve,reject)=>{
+    const id=++geometryWorkerId;
+    const timer=setTimeout(()=>{
+      const failed=geometryWorkerPending.get(id);
+      if(!failed) return;
+      geometryWorkerPending.delete(id);
+      const stalledWorker=geometryWorker;
+      geometryWorker=null;
+      stalledWorker?.terminate();
+      failed.reject(new Error('Geometry worker timeout'));
+      for(const request of geometryWorkerPending.values()){
+        clearTimeout(request.timer);
+        request.reject(new Error('Geometry worker stopped after timeout'));
+      }
+      geometryWorkerPending.clear();
+    },GEOMETRY_WORKER_TIMEOUT_MS);
+    geometryWorkerPending.set(id,{resolve,reject,timer});
+    try{ geometryWorker.postMessage({id,type,...payload}); }
+    catch(err){ clearTimeout(timer); geometryWorkerPending.delete(id); reject(err); }
+  });
+}
+
+async function runGeometryTask(type,payload,fallback){
+  if(!geometryWorker) return fallback();
+  try{return await requestGeometryWorker(type,payload);}
+  catch(err){
+    console.warn('Geometry worker operation failed; fallback to main thread',err);
+    return fallback();
+  }
+}
 
 // Геометрические операции. Ошибку не скрываем: иначе территории
 // могли бы «раздвоиться» (у обеих сторон одновременно).
@@ -666,6 +739,9 @@ const map = L.map('map', {
 
 // Слои по порядку: подложка → территории → анимация → рисование
 map.createPane('terr').style.zIndex = 350;
+map.createPane('gray').style.zIndex = 370;
+map.createPane('grayPreview').style.zIndex = 375;
+map.getPane('grayPreview').style.pointerEvents = 'none';
 map.createPane('fx').style.zIndex = 380;
 map.createPane('draw').style.zIndex = 460;
 
@@ -699,6 +775,10 @@ const state = {
   history:[],
   historyIndex:-1,
   busy:false,
+  grayWidthKm:5,
+  grayGeom:null,
+  grayAreaKm2:0,
+  grayAreas:{},
 
   // рисование
   drawing:false,
@@ -769,9 +849,139 @@ const terrStyle = k => ({
 
 // Слой на каждую страну создаётся при первом обращении
 const layers = {};
+const grayLayer = L.geoJSON(null, {
+  pane:'gray', interactive:false,
+  style:{stroke:false, fillColor:'#8f969c', fillOpacity:.52}
+}).addTo(map);
+const grayPreviewLayer = L.geoJSON(null, {
+  pane:'grayPreview', interactive:false,
+  style:{color:'#8f969c', weight:1, opacity:.52, lineCap:'round', lineJoin:'round'}
+}).addTo(map);
+let sharedFrontLine = null;
+let grayPreviewLine = null;
+let grayPreviewLoaded = false;
+let grayPreviewFrame = 0;
+let grayCommitTimer = 0;
+let grayUpdateId = 0;
+
 function layerFor(k){
   if(!layers[k]) layers[k] = L.geoJSON(null, {pane:'terr', interactive:false, style:() => terrStyle(k)}).addTo(map);
   return layers[k];
+}
+
+function buildSharedFrontLine(){
+  const lines=[];
+  const active=state.active.filter(k => state.geoms[k]);
+  for(let i=0;i<active.length;i++){
+    const boundary=turf.polygonToLine(state.geoms[active[i]]);
+    for(let j=i+1;j<active.length;j++){
+      try{
+        const other=turf.polygonToLine(state.geoms[active[j]]);
+        const overlap=turf.lineOverlap(boundary,other,{tolerance:0.00001});
+        lines.push(...overlap.features);
+      }catch(err){
+        console.warn('Не удалось определить общую границу',active[i],active[j],err);
+      }
+    }
+  }
+  return lines.length ? turf.featureCollection(lines) : null;
+}
+
+function areaInsideGrayZone(geometry,zone,bounds){
+  if(!geometry) return 0;
+  const [west,south,east,north]=bounds;
+  let area=0;
+  for(const part of turf.flatten(geometry).features){
+    const box=turf.bbox(part);
+    if(box[0]>east||box[2]<west||box[1]>north||box[3]<south) continue;
+    try{
+      const clipped=turf.bboxClip(part,bounds);
+      if(!clipped) continue;
+      const overlap=turf.intersect(fc([zone,clipped]));
+      if(overlap) area+=areaKm2(overlap);
+    }catch(err){
+      console.warn('Не удалось посчитать серую зону для части территории',err);
+    }
+  }
+  return area;
+}
+
+function renderGrayZonePreview(){
+  if(state.grayWidthKm===0||!sharedFrontLine){
+    grayPreviewLayer.clearLayers();
+    grayPreviewLoaded=false;
+    return;
+  }
+  if(!grayPreviewLine){
+    try{ grayPreviewLine=turf.simplify(sharedFrontLine,{tolerance:.001,highQuality:false}); }
+    catch(_){ grayPreviewLine=sharedFrontLine; }
+  }
+  if(!grayPreviewLoaded){
+    grayPreviewLayer.addData(grayPreviewLine);
+    grayPreviewLoaded=true;
+  }
+  const center=map.getCenter();
+  const point=map.latLngToContainerPoint(center);
+  const metersPerPixel=map.distance(center,map.containerPointToLatLng(point.add([1,0])));
+  const width=Math.min(512,state.grayWidthKm*1000/Math.max(metersPerPixel,1));
+  grayPreviewLayer.setStyle({weight:Math.max(.5,width),opacity:.52});
+}
+
+function calculateGrayZoneOnMain(frontLine,geometries,widthKm){
+  const buffered=turf.buffer(frontLine,widthKm/2,{units:'kilometers',steps:8});
+  const parts=buffered.type==='FeatureCollection'?buffered.features:[buffered];
+  const geometry=parts.reduce((combined,part)=>combined?unionStrict(combined,part):part,null);
+  if(!geometry) return {geometry:null,areaKm2:0,areas:{}};
+  const bounds=turf.bbox(geometry),areas={};
+  let totalArea=0;
+  for(const [key,territory] of Object.entries(geometries)){
+    areas[key]=Math.min(areaKm2(territory),areaInsideGrayZone(territory,geometry,bounds));
+    totalArea+=areas[key];
+  }
+  return {geometry,areaKm2:totalArea,areas};
+}
+
+function updateGrayZone(rebuildFrontLine=false){
+  const updateId=++grayUpdateId;
+  if(grayCommitTimer){ clearTimeout(grayCommitTimer); grayCommitTimer=0; }
+  if(grayPreviewFrame){ cancelAnimationFrame(grayPreviewFrame); grayPreviewFrame=0; }
+  grayLayer.clearLayers();
+  grayPreviewLayer.clearLayers();
+  grayPreviewLoaded=false;
+  state.grayGeom=null;
+  state.grayAreaKm2=0;
+  state.grayAreas={};
+
+  if(rebuildFrontLine||!sharedFrontLine){
+    try{
+      sharedFrontLine=buildSharedFrontLine();
+      grayPreviewLine=null;
+    }
+    catch(err){
+      sharedFrontLine=null;
+      console.warn('Не удалось построить линию фронта',err);
+    }
+  }
+  if(state.grayWidthKm===0||!sharedFrontLine){ updateUI(); return; }
+
+  const frontLine=sharedFrontLine;
+  const widthKm=state.grayWidthKm;
+  const geometries=Object.fromEntries(state.active.filter(key=>state.geoms[key]).map(key=>[key,state.geoms[key]]));
+  const applyResult=result=>{
+    if(updateId!==grayUpdateId) return;
+    state.grayGeom=result?.geometry||null;
+    state.grayAreaKm2=result?.areaKm2||0;
+    state.grayAreas=result?.areas||{};
+    if(state.grayGeom&&state.grayAreaKm2>0) grayLayer.addData(state.grayGeom);
+    updateUI();
+  };
+  runGeometryTask('gray-zone',{sharedFrontLine:frontLine,geometries,widthKm},
+    ()=>calculateGrayZoneOnMain(frontLine,geometries,widthKm))
+    .then(applyResult)
+    .catch(err=>{
+      console.warn('Не удалось пересчитать серую зону',err);
+      applyResult(null);
+    });
 }
 
 function redraw(){
@@ -781,13 +991,14 @@ function redraw(){
     lyr.clearLayers();
     if(state.active.includes(k) && state.geoms[k]) lyr.addData(state.geoms[k]);
   }
+  updateGrayZone(true);
   updateUI();
 }
 
 // Табло: цветные «чипы» со странами и общая шкала из сегментов
-function syncScore(areas, total){
+function syncScore(areas, total, grayArea){
   const chips = $('chips'), bar = $('bar');
-  const sig = state.active.join('|') + '#' + state.active.map(colorOf).join('|');
+  const sig = state.active.join('|') + '#' + state.active.map(colorOf).join('|') + '#gray';
   if(chips.dataset.sig !== sig){
     chips.dataset.sig = sig;
     chips.innerHTML = ''; bar.innerHTML = '';
@@ -805,6 +1016,17 @@ function syncScore(areas, total){
       seg.style.background = colorOf(k);
       bar.appendChild(seg);
     }
+    const grayChip=document.createElement('div');
+    grayChip.className='chip gray-chip';
+    grayChip.dataset.k='gray';
+    grayChip.style.setProperty('--c','#92999f');
+    grayChip.innerHTML='<i class="dot"></i><span class="who"><span class="nm"></span><span class="km"></span></span><b></b>';
+    grayChip.querySelector('.nm').textContent='Серая зона';
+    chips.appendChild(grayChip);
+    const graySegment=document.createElement('i');
+    graySegment.dataset.k='gray';
+    graySegment.style.background='#92999f';
+    bar.appendChild(graySegment);
   }
   for(const k of state.active){
     const pct = Math.max(0, Math.min(100, areas[k] / total * 100));
@@ -816,13 +1038,25 @@ function syncScore(areas, total){
     }
     if(seg) seg.style.width = pct + '%';
   }
+  const grayPct=Math.max(0,Math.min(100,grayArea/total*100));
+  const grayChip=chips.querySelector('[data-k="gray"]');
+  const graySegment=bar.querySelector('[data-k="gray"]');
+  if(grayChip){
+    grayChip.querySelector('b').textContent=grayPf.format(grayPct)+'%';
+    grayChip.querySelector('.km').textContent=nf.format(grayArea)+' км²';
+  }
+  if(graySegment) graySegment.style.width=grayPct+'%';
 }
 
 function updateUI(){
   const areas = {};
-  let total = 0;
-  for(const k of state.active){ areas[k] = areaKm2(state.geoms[k]); total += areas[k]; }
-  syncScore(areas, total || 1);
+  let total = state.grayAreaKm2;
+  for(const k of state.active){
+    const territoryArea=areaKm2(state.geoms[k]);
+    areas[k]=Math.max(0,territoryArea-(state.grayAreas[k]||0));
+    total+=areas[k];
+  }
+  syncScore(areas, total || 1, state.grayAreaKm2);
 
   $('undo').disabled  = state.busy || state.historyIndex <= 0;
   $('redo').disabled  = state.busy || state.historyIndex >= state.history.length - 1;
@@ -837,39 +1071,44 @@ function setBusy(v){
 }
 
 /* =====================================================================
-   Анимация захвата — волна от ближайшей точки своей границы
-   ===================================================================== */
+  Анимация захвата
+  ===================================================================== */
 function findSeed(selected, own){
-  const c = turf.centroid(selected);
+  const center=turf.centroid(selected);
   try{
     if(own){
-      const lines = turf.polygonToLine(own);
-      const list = lines.type === 'FeatureCollection' ? lines.features : [lines];
-      let best = null, bd = Infinity;
-      for(const l of list){
-        const p = turf.nearestPointOnLine(l, c);
-        const d = p.properties.dist;
-        if(d < bd){ bd = d; best = p; }
+      const lines=turf.polygonToLine(own);
+      const features=lines.type==='FeatureCollection'?lines.features:[lines];
+      let nearest=null,distance=Infinity;
+      for(const line of features){
+        const point=turf.nearestPointOnLine(line,center);
+        if(point.properties.dist<distance){
+          distance=point.properties.dist;
+          nearest=point;
+        }
       }
-      if(best) return best;
+      if(nearest) return nearest;
     }
   }catch(_){}
-  return c;
+  return center;
 }
 
-function maxDistanceFrom(point, feature){
-  let max = 0;
+function maxDistanceFrom(point,feature){
+  let maxDistance=0;
   try{
-    turf.coordEach(feature, coord => {
-      const d = turf.distance(point, turf.point(coord), {units:'kilometers'});
-      if(d > max) max = d;
+    turf.coordEach(feature,coord=>{
+      maxDistance=Math.max(maxDistance,turf.distance(point,turf.point(coord),{units:'kilometers'}));
     });
   }catch(_){}
-  return Math.max(max, .1);
+  return Math.max(maxDistance,.1);
 }
 
 function clearFx(){
-  if(state.fx){ map.removeLayer(state.fx); state.fx = null; }
+  if(state.fx){
+    map.removeLayer(state.fx.layer);
+    map.removeLayer(state.fx.renderer);
+    state.fx=null;
+  }
   $('banner').classList.remove('show');
 }
 
@@ -877,36 +1116,39 @@ function clearFx(){
 // (clearFx вызывается уже после redraw — так заливка не мигает).
 function animateCapture(selected, side){
   if(matchMedia('(prefers-reduced-motion: reduce)').matches) return Promise.resolve();
-
-  return new Promise(resolve => {
+  return new Promise(resolve=>{
     clearFx();
-    state.fx = L.geoJSON(null, {
-      pane:'fx', interactive:false,
-      style:{color:'#fff', weight:2.5, opacity:.95, fillColor:colorOf(side), fillOpacity:.7}
+    const renderer=L.canvas({pane:'fx',padding:.5});
+    const layer=L.geoJSON(null,{
+      renderer,interactive:false,
+      style:{color:'#fff',weight:2.5,opacity:.95,fillColor:colorOf(side),fillOpacity:.7}
     }).addTo(map);
+    state.fx={layer,renderer};
 
-    const banner = $('banner');
-    banner.textContent = nameOf(side) + ' продвигается';
-    banner.className = 'show';
-    banner.style.setProperty('--c', colorOf(side));
+    const banner=$('banner');
+    banner.textContent=nameOf(side)+' продвигается';
+    banner.className='show';
+    banner.style.setProperty('--c',colorOf(side));
 
-    const seed = findSeed(selected, state.geoms[side]);
-    const maxD = maxDistanceFrom(seed, selected);
-    const t0 = performance.now();
-
-    const frame = now => {
-      const t = Math.min(1, (now - t0) / ANIM_MS);
-      const k = 1 - Math.pow(1 - t, 3);
-      let reveal = null;
+    const seed=findSeed(selected,state.geoms[side]);
+    const maxDistance=maxDistanceFrom(seed,selected);
+    const started=performance.now();
+    const frame=now=>{
+      const progress=Math.min(1,(now-started)/ANIM_MS);
+      const eased=1-Math.pow(1-progress,3);
+      let visible=null;
       try{
-        reveal = t >= 1 ? selected
-          : intersectStrict(selected, turf.buffer(seed, Math.max(.01, maxD*k), {units:'kilometers', steps:24}));
-      }catch(_){ reveal = t >= 1 ? selected : null; }
+        visible=progress>=1?selected:intersectStrict(
+          selected,
+          turf.buffer(seed,Math.max(.01,maxDistance*eased),{units:'kilometers',steps:24})
+        );
+      }catch(_){
+        visible=progress>=1?selected:null;
+      }
 
-      state.fx.clearLayers();
-      if(reveal) state.fx.addData(reveal);
-
-      if(t < 1) requestAnimationFrame(frame);
+      layer.clearLayers();
+      if(visible) layer.addData(visible);
+      if(progress<1) requestAnimationFrame(frame);
       else resolve();
     };
     requestAnimationFrame(frame);
@@ -916,6 +1158,38 @@ function animateCapture(selected, side){
 /* =====================================================================
    Захват территории
    ===================================================================== */
+function calculateCaptureGeometry(shape,side,ownGeom,enemyGeoms){
+  const calculate=selection=>{
+    const parts={};
+    for(const [key,geometry] of Object.entries(enemyGeoms)){
+      const part=intersectStrict(selection,geometry);
+      if(part&&areaKm2(part)>=MIN_CAPTURE_KM2) parts[key]=part;
+    }
+    const keys=Object.keys(parts);
+    if(!keys.length) return null;
+    const selected=keys.map(key=>parts[key]).reduce((a,b)=>unionStrict(a,b));
+    const nextGeoms={},from={};
+    for(const key of keys){
+      nextGeoms[key]=differenceStrict(enemyGeoms[key],parts[key]);
+      from[key]=areaKm2(parts[key]);
+    }
+    nextGeoms[side]=unionStrict(ownGeom,selected);
+    return {selected,nextGeoms,km:areaKm2(selected),from};
+  };
+
+  let simplified=shape;
+  if(turf.coordAll(shape).length>=80){
+    try{ simplified=turf.simplify(shape,{tolerance:.00005,highQuality:false}); }catch(_){}
+  }
+  try{
+    const result=calculate(simplified);
+    return result||simplified===shape?result:calculate(shape);
+  }catch(err){
+    if(simplified===shape) throw err;
+    return calculate(shape);
+  }
+}
+
 async function capture(shape){
   if(state.busy) return;
 
@@ -927,38 +1201,26 @@ async function capture(shape){
   try{
     await nextFrame();                       // дать браузеру показать «занято»
 
-    const parts = {};
-    for(const k of enemies){
-      const part = intersectStrict(shape, state.geoms[k]);
-      if(part && areaKm2(part) >= MIN_CAPTURE_KM2) parts[k] = part;
-    }
-    const keys = Object.keys(parts);
-    if(!keys.length){
+    const enemyGeoms=Object.fromEntries(enemies.map(key=>[key,state.geoms[key]]));
+    const ownGeom=state.geoms[side];
+    const result=await runGeometryTask('capture',{
+      shape,side,ownGeom,enemyGeoms,minAreaKm2:MIN_CAPTURE_KM2
+    },()=>calculateCaptureGeometry(shape,side,ownGeom,enemyGeoms));
+    if(!result){
       toast(enemies.length === 1
         ? 'В этой области нет территории: ' + nameOf(enemies[0])
         : 'В этой области нет чужой территории');
       return;
     }
-
-    const selected = keys.map(k => parts[k]).reduce((a, b) => unionStrict(a, b));
-
-    // Сначала считаем итог, потом показываем — при ошибке состояние не меняется.
-    const next = {};
-    for(const k of keys) next[k] = differenceStrict(state.geoms[k], parts[k]);
-    next[side] = unionStrict(state.geoms[side], selected);
-
+    const {selected,nextGeoms,km,from}=result;
     await animateCapture(selected, side);
-
-    const km = areaKm2(selected);
-    const from = {};
-    for(const k of keys) from[k] = areaKm2(parts[k]);
     const entry = {
       type:'capture', side, km, from,
       n:state.log.filter(e => e.type === 'capture').length + 1,
       places:null, status:'loading'
     };
 
-    state.geoms = {...state.geoms, ...next};
+    state.geoms = {...state.geoms, ...nextGeoms};
     state.log   = [...state.log, entry];
     redraw();
     commit();                                  // внутри обновит и журнал
@@ -985,6 +1247,9 @@ const OVERPASS = [
   'https://overpass.private.coffee/api/interpreter'
 ];
 let overpassCursor = 0;
+const overpassCache=new Map();
+const overpassPending=new Map();
+const OVERPASS_CACHE_LIMIT=64;
 const OSM_TIMEOUT_MS = 20000;            // дольше не ждём — не оставляем «вечный» поиск
 const LOCAL_TIMEOUT_MS = 30000;
 const POP_CACHE_KEY = 'places-ne10-v1';
@@ -1070,7 +1335,22 @@ function captureTail(e){
 }
 
 /* --- 1) быстро и без сервера: крупные пункты из Natural Earth (кэшируются в браузере) --- */
-let localPlaces = null, localPlacesPromise = null;
+let localPlaces = null, localPlacesPromise = null, localPlacesIndex = null;
+const localPlacesResultCache=new WeakMap();
+
+function buildLocalPlacesIndex(places){
+  if(typeof RBush!=='function') return null;
+  try{
+    const index=new RBush();
+    index.load(places.filter(p=>Number.isFinite(p.lon)&&Number.isFinite(p.lat)).map(place=>({
+      minX:place.lon,minY:place.lat,maxX:place.lon,maxY:place.lat,place
+    })));
+    return index;
+  }catch(err){
+    console.warn('RBush index недоступен, используется пакетный поиск',err);
+    return null;
+  }
+}
 
 function compactPlaces(data){
   const out = [];
@@ -1103,6 +1383,7 @@ function ensureLocalPlaces(){
         cacheSet(POP_CACHE_KEY, arr);
       }
       localPlaces = arr;
+      localPlacesIndex=buildLocalPlacesIndex(arr);
       return arr;
     })().catch(err => { localPlacesPromise = null; throw err; });
   }
@@ -1112,10 +1393,17 @@ function ensureLocalPlaces(){
 // Названия: на землях Украины — украинские, в остальных случаях — русские
 const pickName = p => (p.a3 === 'UKR' ? (p.uk || p.ru || p.en) : (p.ru || p.en));
 
-function localPlacesIn(geom){
+async function localPlacesIn(geom){
+  const cached=localPlacesResultCache.get(geom);
+  if(cached) return cached;
   const [w, s, e, n] = turf.bbox(geom);
   const seen = new Set(), out = [];
-  for(const p of localPlaces){
+  const candidates=localPlacesIndex
+    ? localPlacesIndex.search({minX:w,minY:s,maxX:e,maxY:n}).map(item=>item.place)
+    : localPlaces;
+  for(let i=0;i<candidates.length;i++){
+    if(i>0&&i%400===0) await new Promise(resolve=>requestAnimationFrame(resolve));
+    const p=candidates[i];
     if(p.lon < w || p.lon > e || p.lat < s || p.lat > n) continue;
     let inside = false;
     try{ inside = turf.booleanPointInPolygon([p.lon, p.lat], geom); }catch(_){}
@@ -1128,6 +1416,7 @@ function localPlacesIn(geom){
     out.push({name, type:p.pop >= 15000 ? 'town' : 'place', pop:p.pop, lat:p.lat, lon:p.lon});
   }
   out.sort((a, b) => (TYPE_RANK[a.type] - TYPE_RANK[b.type]) || (b.pop - a.pop) || a.name.localeCompare(b.name, 'ru'));
+  localPlacesResultCache.set(geom,out);
   return out;
 }
 
@@ -1155,6 +1444,10 @@ function overpassAreaFilter(geom){
 // POST у некоторых браузеров/зеркал режется CORS, из-за чего журнал раньше
 // показывал «не удалось определить».
 async function fetchOverpass(query){
+  if(overpassCache.has(query)) return overpassCache.get(query);
+  if(overpassPending.has(query)) return overpassPending.get(query);
+
+  const request=(async()=>{
   const firstServer = overpassCursor;
   overpassCursor = (overpassCursor + 1) % OVERPASS.length;
   const errors = [];
@@ -1178,6 +1471,8 @@ async function fetchOverpass(query){
         throw new Error('Ответ Overpass не содержит массива elements');
       if(data.remark && /(error|timed out|out of memory)/i.test(data.remark) && !data.elements.length)
         throw new Error(data.remark);
+      overpassCache.set(query,data);
+      if(overpassCache.size>OVERPASS_CACHE_LIMIT) overpassCache.delete(overpassCache.keys().next().value);
       return data;
     }catch(err){
       const message = err.name === 'AbortError'
@@ -1191,6 +1486,10 @@ async function fetchOverpass(query){
   }
 
   throw new Error('Все серверы Overpass недоступны. ' + errors.join('; '));
+  })();
+  overpassPending.set(query,request);
+  try{return await request;}
+  finally{overpassPending.delete(query);}
 }
 
 async function fetchOsmPlaces(geom){
@@ -1212,18 +1511,22 @@ async function fetchOsmPlaces(geom){
   }
 
   const sel = '["place"~"^(city|town|village|hamlet|isolated_dwelling|locality)$"]';
-  const tasks = [];
+  const queries = [];
   for(const [x1,y1,x2,y2] of boxes){
     const query = '[out:json][timeout:15];node' + sel + '(' +
       y1.toFixed(5) + ',' + x1.toFixed(5) + ',' + y2.toFixed(5) + ',' + x2.toFixed(5) +
       ');out body;';
-    tasks.push(fetchOverpass(query).catch(err => {
-      console.warn('Overpass:', err);
-      return null;
-    }));
+    queries.push(query);
   }
 
-  const results = await Promise.all(tasks);
+  const results=[];
+  for(let i=0;i<queries.length;i+=3){
+    const batch=await Promise.all(queries.slice(i,i+3).map(query=>fetchOverpass(query).catch(err=>{
+      console.warn('Overpass:',err);
+      return null;
+    })));
+    results.push(...batch);
+  }
   const els = [];
   const rawSeen = new Set();
   for(const j of results){
@@ -1295,7 +1598,7 @@ async function lookupPlaces(entry, geom){
   const localPromise = (async () => {
     try{
       await withTimeout(ensureLocalPlaces(), LOCAL_TIMEOUT_MS);
-      return localPlacesIn(geom);
+      return await localPlacesIn(geom);
     }catch(err){
       console.warn('Локальные данные:', err);
       return [];
@@ -1567,7 +1870,17 @@ async function endDraw(){
   if(tool === 'lasso' && pts.length < 3) return;   // просто клик
 
   let shape = null;
-  try{ shape = tool === 'brush' ? brushShape(pts) : lassoShape(pts); }
+  const coords=pts.map(point=>{const wrapped=map.wrapLatLng(point);return [wrapped.lng,wrapped.lat]});
+  let radiusKm=0;
+  if(tool==='brush'){
+    const latitude=pts.reduce((sum,point)=>sum+point.lat,0)/pts.length;
+    const metersPerPixel=156543.03392*Math.cos(latitude*Math.PI/180)/Math.pow(2,map.getZoom());
+    radiusKm=state.brush*metersPerPixel/1000;
+  }
+  try{
+    shape=await runGeometryTask(tool==='brush'?'brush':'lasso',{coords,radiusKm},
+      ()=>tool==='brush'?brushShape(pts):lassoShape(pts));
+  }
   catch(err){ console.warn(err); }
 
   if(!shape){ toast('Не удалось построить область'); return; }
@@ -2025,6 +2338,27 @@ $('addCountry').addEventListener('click', openPicker);
 $('pickClose').addEventListener('click', closePicker);
 $('picker').addEventListener('click', e => { if(e.target === $('picker')) closePicker(); });
 $('pickSearch').addEventListener('input', renderPicker);
+function commitGrayWidth(){
+  if(grayCommitTimer){ clearTimeout(grayCommitTimer); grayCommitTimer=0; }
+  if(grayPreviewFrame){ cancelAnimationFrame(grayPreviewFrame); grayPreviewFrame=0; }
+  updateGrayZone();
+  updateUI();
+}
+$('grayWidth').addEventListener('input',e=>{
+  state.grayWidthKm=Number(e.target.value);
+  $('grayWidthOut').textContent=state.grayWidthKm+' км';
+  grayLayer.clearLayers();
+  if(!grayPreviewFrame){
+    grayPreviewFrame=requestAnimationFrame(()=>{
+      grayPreviewFrame=0;
+      renderGrayZonePreview();
+    });
+  }
+  if(grayCommitTimer) clearTimeout(grayCommitTimer);
+  grayCommitTimer=setTimeout(commitGrayWidth,180);
+});
+$('grayWidth').addEventListener('change',commitGrayWidth);
+map.on('moveend zoomend',()=>{if(grayPreviewLoaded) renderGrayZonePreview();});
 
 /* =====================================================================
    Тема карты — сохраняется между запусками
