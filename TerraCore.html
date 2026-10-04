@@ -1,0 +1,1816 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>GeoFront — территориальная игра</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js"></script>
+
+<style>
+:root{
+  --bg:#0c1115;
+  --panel:rgba(10,16,21,.92);
+  --panel-2:#16202a;
+  --panel-3:#1d2a36;
+  --line:#2a3743;
+  --line-2:#3f505f;
+  --ink:#e8eef2;
+  --mute:#8d9ca7;
+  --fc:#1688ff;               /* цвет выбранной стороны */
+  --gap:12px;
+  --topH:58px;
+  --font:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
+  font-family:var(--font);user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent}
+button{font-family:inherit;color:inherit}
+:focus-visible{outline:2px solid #8cc4ff;outline-offset:2px}
+
+/* ---------- Карта ---------- */
+#map{position:fixed;inset:0;background:#20252a;touch-action:none}
+.leaflet-container{background:#20252a;font-family:var(--font)}
+.leaflet-tile{filter:brightness(.48) contrast(1.15) saturate(.65)}
+.leaflet-container.tool-draw{cursor:crosshair}
+body.busy .leaflet-container{cursor:progress}
+
+.leaflet-control-attribution{background:rgba(10,16,21,.78)!important;color:#aab6be!important;font-size:10px!important}
+.leaflet-control-attribution a{color:#a9d0ff!important}
+.leaflet-bar{border:1px solid var(--line)!important;border-radius:10px!important;overflow:hidden;box-shadow:0 6px 18px rgba(0,0,0,.4)!important}
+.leaflet-bar a,.view-ctl button{
+  background:var(--panel-2)!important;color:var(--ink)!important;
+  border:0!important;border-bottom:1px solid var(--line)!important;
+}
+.leaflet-bar a:last-child,.view-ctl button:last-child{border-bottom:0!important}
+.leaflet-bar a:hover,.view-ctl button:hover{background:var(--panel-3)!important}
+.view-ctl button{display:block;width:100%;min-width:34px;height:32px;padding:0 10px;font-size:12px;cursor:pointer;white-space:nowrap}
+.leaflet-control-scale-line{background:rgba(10,16,21,.72)!important;color:var(--ink)!important;border-color:var(--mute)!important;font-size:10px}
+
+/* ---------- Табло ---------- */
+#top{
+  position:fixed;z-index:1000;left:var(--gap);right:var(--gap);top:var(--gap);height:var(--topH);
+  display:flex;align-items:center;gap:20px;padding:0 18px;
+  border:1px solid var(--line);border-radius:14px;
+  background:var(--panel);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  box-shadow:0 10px 30px rgba(0,0,0,.35)
+}
+.logo{font-size:17px;font-weight:800;letter-spacing:.3em;color:#f4f7f8;white-space:nowrap}
+.score{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:6px}
+.chips{display:flex;justify-content:space-between;gap:18px;overflow-x:auto;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{display:flex;align-items:center;gap:8px;white-space:nowrap;flex:none}
+.chip .dot{width:9px;height:9px;border-radius:50%;background:var(--c);flex:none}
+.chip b{font-size:17px;font-weight:700;line-height:1;color:var(--c);font-variant-numeric:tabular-nums}
+.who{display:flex;flex-direction:column;gap:1px;line-height:1.1}
+.nm{font-size:12.5px;font-weight:600}
+.km{font-size:10.5px;color:var(--mute);font-variant-numeric:tabular-nums}
+.bar{display:flex;height:6px;border-radius:4px;overflow:hidden;background:#222c35;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.07)}
+.bar i{display:block;flex:none;height:100%;width:0;transition:width .6s cubic-bezier(.2,.8,.2,1)}
+
+/* ---------- Панель ---------- */
+#panelToggle{
+  position:fixed;z-index:1105;left:var(--gap);top:calc(var(--gap)*2 + var(--topH));
+  width:44px;height:44px;display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--line-2);border-radius:12px;background:var(--panel);
+  font-size:21px;line-height:1;cursor:pointer;box-shadow:0 8px 22px rgba(0,0,0,.4);touch-action:manipulation
+}
+#panelToggle:hover{background:var(--panel-3)}
+#panel{
+  position:fixed;z-index:1104;left:var(--gap);
+  top:calc(var(--gap)*2 + var(--topH) + 52px);
+  width:244px;max-height:calc(100% - var(--gap)*3 - var(--topH) - 52px - 8px);overflow:auto;
+  padding:14px;border:1px solid var(--line);border-radius:16px;
+  background:var(--panel);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  box-shadow:0 16px 40px rgba(0,0,0,.48);
+  transition:transform .2s ease,opacity .2s ease;
+}
+#panel.closed{transform:translateX(-115%);opacity:0;pointer-events:none}
+.title{font-size:12px;font-weight:600;color:var(--mute);margin:0 0 9px}
+.sep{height:1px;background:var(--line);margin:14px 0}
+
+.faction,.tool,.action,.addc{
+  border:1px solid var(--line-2);background:var(--panel-2);border-radius:12px;cursor:pointer;
+  transition:background .15s,border-color .15s;touch-action:manipulation
+}
+.faction:hover,.tool:hover,.action:hover,.addc:hover,.rm:hover{background:var(--panel-3);border-color:#5b6f80}
+.frow{display:flex;gap:6px;margin-bottom:8px}
+.faction{display:flex;align-items:center;gap:10px;flex:1;min-width:0;padding:11px 12px;font-size:15px;text-align:left}
+.faction .sw{width:14px;height:14px;border-radius:50%;flex:none;background:var(--c)}
+.faction .fname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.faction.active{
+  border-color:var(--c);background:var(--panel-3);
+  background:color-mix(in srgb,var(--c) 24%,#0f1820);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c) 40%,transparent)
+}
+.rm{width:40px;flex:none;border:1px solid var(--line-2);background:var(--panel-2);border-radius:12px;
+  cursor:pointer;font-size:18px;line-height:1;color:var(--mute)}
+.addc{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;height:42px;margin-top:2px;
+  font-size:14px;border-style:dashed}
+.addc svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.addc:disabled{opacity:.4;cursor:not-allowed}
+kbd{margin-left:auto;font:inherit;font-size:11px;color:var(--mute);border:1px solid var(--line-2);border-radius:5px;padding:1px 6px}
+@media(hover:none){kbd{display:none}}
+
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.tool,.action{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;
+  height:60px;font-size:12px
+}
+.tool svg,.action svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.tool.active{background:#46545f;border-color:#d3dade;color:#fff}
+.action:disabled{opacity:.35;cursor:not-allowed}
+.action:disabled:hover{background:var(--panel-2);border-color:var(--line-2)}
+
+.hint{margin:10px 2px 0;font-size:12px;line-height:1.4;color:var(--mute)}
+.brushOnly{display:none;margin-top:12px}
+body[data-tool="brush"] .brushOnly{display:block}
+.brushOnly label{display:flex;justify-content:space-between;font-size:12px;color:var(--mute);margin-bottom:6px}
+.brushOnly output{color:var(--ink);font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--fc)}
+
+/* ---------- Подсказки, баннер, загрузка ---------- */
+#toast{
+  position:fixed;z-index:1100;left:50%;bottom:28px;transform:translate(-50%,8px);
+  max-width:min(92vw,440px);padding:12px 18px;border-radius:12px;text-align:center;font-size:14px;
+  background:rgba(6,10,13,.95);border:1px solid var(--line);box-shadow:0 10px 30px rgba(0,0,0,.45);
+  opacity:0;pointer-events:none;transition:opacity .2s,transform .2s
+}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+
+#banner{
+  position:fixed;z-index:1101;left:50%;top:calc(var(--gap)*2 + var(--topH) + 4px);
+  transform:translate(-50%,-6px);padding:10px 18px;border-radius:12px;
+  background:var(--panel);border:1px solid var(--line-2);border-left-width:4px;border-left-color:var(--c,#8d9ca7);
+  font-weight:700;font-size:14px;opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;white-space:nowrap
+}
+#banner.show{opacity:1;transform:translate(-50%,0)}
+
+#ring{
+  position:fixed;z-index:1050;display:none;pointer-events:none;border-radius:50%;
+  border:1.5px solid var(--fc)
+}
+#ring::after{content:"";position:absolute;inset:0;border-radius:50%;background:var(--fc);opacity:.16}
+
+#loader{
+  position:fixed;z-index:1200;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+  background:rgba(8,12,16,.86);text-align:center;padding:24px;transition:opacity .25s
+}
+#loader.hide{opacity:0;pointer-events:none}
+#loader p{margin:0;max-width:340px;font-size:15px;line-height:1.45}
+.spinner{width:34px;height:34px;border-radius:50%;border:3px solid var(--line-2);border-top-color:#cfe6ff;animation:spin .9s linear infinite}
+#loader.error .spinner{display:none}
+#retry{display:none;padding:10px 20px;border-radius:12px;border:1px solid var(--line-2);background:var(--panel-3);cursor:pointer;font-size:15px}
+#loader.error #retry{display:block}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---------- Журнал захватов ---------- */
+#logToggle{
+  position:fixed;z-index:1105;right:var(--gap);top:calc(var(--gap)*2 + var(--topH));
+  width:44px;height:44px;display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--line-2);border-radius:12px;background:var(--panel);
+  cursor:pointer;box-shadow:0 8px 22px rgba(0,0,0,.4);touch-action:manipulation
+}
+#logToggle svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+#logToggle:hover,#logToggle.on{background:var(--panel-3)}
+#logToggle.unread::after{content:"";position:absolute;top:7px;right:7px;width:9px;height:9px;
+  border-radius:50%;background:#ff5d6c;box-shadow:0 0 0 2px var(--panel)}
+#log{
+  position:fixed;z-index:1104;right:var(--gap);
+  top:calc(var(--gap)*2 + var(--topH) + 52px);
+  width:min(340px,calc(100% - var(--gap)*2));
+  max-height:calc(100% - var(--gap)*2 - var(--topH) - 52px - 150px);
+  display:flex;flex-direction:column;overflow:hidden;
+  border:1px solid var(--line);border-radius:16px;
+  background:var(--panel);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  box-shadow:0 16px 40px rgba(0,0,0,.48);
+  transition:transform .2s ease,opacity .2s ease
+}
+#log.closed{transform:translateX(115%);opacity:0;pointer-events:none}
+.loghead{display:flex;align-items:center;justify-content:space-between;padding:12px 12px 6px 14px}
+.loghead .title{margin:0}
+.loghead button{width:30px;height:30px;border:0;background:transparent;border-radius:8px;cursor:pointer;font-size:18px;color:var(--mute)}
+.loghead button:hover{background:var(--panel-3);color:var(--ink)}
+#logSummary{padding:2px 14px 10px;border-bottom:1px solid var(--line)}
+.srow{display:grid;grid-template-columns:1fr 66px 62px 34px;gap:6px;align-items:center;padding:3px 0;font-size:12.5px}
+.srow.h{font-size:10.5px;color:var(--mute)}
+.srow .n{display:flex;align-items:center;gap:7px;min-width:0}
+.srow .n i{width:8px;height:8px;border-radius:50%;background:var(--c);flex:none}
+.srow .n span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srow .v{text-align:right;font-variant-numeric:tabular-nums}
+.srow .gain{color:#7fd99b}
+.srow .lost{color:#ff8b95}
+#logList{overflow:auto;padding:10px 12px 12px}
+#logEmpty{margin:0;padding:4px 16px 16px;font-size:12.5px;line-height:1.45;color:var(--mute)}
+#logEmpty[hidden]{display:none}
+.entry{margin:0 0 8px;padding:8px 10px;border-left:3px solid var(--c,#566);border-radius:0 10px 10px 0;background:var(--panel-2)}
+.entry .txt{font-size:13.5px;line-height:1.42;user-select:text;-webkit-user-select:text}
+.entry .txt b{color:var(--c);font-weight:700}
+.entry .meta{margin-top:4px;font-size:11.5px;line-height:1.4;color:var(--mute)}
+.entry .wait{animation:blink 1.2s ease-in-out infinite}
+.entry .more{display:none;margin-top:6px;padding-top:6px;border-top:1px solid var(--line);font-size:12.5px;line-height:1.5;user-select:text;-webkit-user-select:text}
+.entry.open .more{display:block}
+.entry .more p{margin:0 0 4px}
+.entry .more p span{color:var(--mute)}
+.linkbtn{padding:0;border:0;background:none;font-size:11.5px;color:#8cc4ff;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.entry.event{border-left-color:var(--line-2);font-size:12.5px;color:var(--mute)}
+@keyframes blink{50%{opacity:.4}}
+
+/* ---------- Выбор страны ---------- */
+#picker{position:fixed;inset:0;z-index:1150;display:none;align-items:center;justify-content:center;
+  padding:16px;background:rgba(5,8,11,.62)}
+#picker.open{display:flex}
+.pbox{width:min(420px,100%);max-height:min(580px,100%);display:flex;flex-direction:column;overflow:hidden;
+  background:var(--panel);border:1px solid var(--line-2);border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.6);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.phead{display:flex;align-items:center;gap:8px;padding:12px;border-bottom:1px solid var(--line)}
+.phead input{flex:1;min-width:0;padding:10px 12px;border-radius:10px;border:1px solid var(--line-2);
+  background:var(--panel-2);color:var(--ink);font:inherit;font-size:15px;user-select:text;-webkit-user-select:text}
+.phead button{width:40px;height:40px;flex:none;border:1px solid var(--line-2);background:var(--panel-2);
+  border-radius:10px;cursor:pointer;font-size:20px;line-height:1}
+.phead button:hover{background:var(--panel-3)}
+#pickMsg{padding:16px;color:var(--mute);font-size:14px;text-align:center}
+#pickMsg:empty{display:none}
+#pickList{overflow:auto;padding:6px}
+.pitem{display:flex;justify-content:space-between;align-items:baseline;gap:12px;width:100%;
+  padding:10px 12px;border:0;background:transparent;border-radius:10px;text-align:left;cursor:pointer;font-size:15px}
+.pitem:hover,.pitem:focus-visible{background:var(--panel-3)}
+.pitem small{color:var(--mute);font-size:12px;text-align:right}
+
+.places-captured{margin-top:6px;padding:6px 8px;border-left:2px solid var(--c);background:rgba(255,255,255,.025)}.places-title{font-weight:600;color:var(--text)}.places-list{line-height:1.45;margin-top:2px}
+
+@media(max-width:560px){
+  :root{--gap:8px;--topH:52px}
+  #top{padding:0 12px}
+  .logo,.km{display:none}
+  .chips{gap:12px}
+  .chip{gap:6px}
+  .chip b{font-size:15px}
+  .nm{font-size:12px}
+  #panel{width:228px}
+}
+@media(prefers-reduced-motion:reduce){
+  *{transition:none!important;animation-duration:.01ms!important}
+}
+</style>
+</head>
+
+<body data-tool="pan">
+<div id="map"></div>
+<div id="ring"></div>
+
+<div id="top">
+  <div class="logo">GEOFRONT</div>
+  <div class="score" aria-live="polite">
+    <div class="chips" id="chips"></div>
+    <div class="bar" id="bar" role="img" aria-label="Соотношение территорий"></div>
+  </div>
+</div>
+
+<button id="panelToggle" aria-label="Закрыть меню" aria-expanded="true">×</button>
+<div id="panel">
+  <div class="title">Страны</div>
+  <div id="factions"></div>
+  <button class="addc" id="addCountry" type="button">
+    <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Добавить страну
+  </button>
+
+  <div class="sep"></div>
+  <div class="title">Инструмент</div>
+  <div class="grid3">
+    <button class="tool active" data-tool="pan" aria-pressed="true" title="Перемещение (V)">
+      <svg viewBox="0 0 24 24"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></svg>Карта
+    </button>
+    <button class="tool" data-tool="lasso" aria-pressed="false" title="Лассо (L)">
+      <svg viewBox="0 0 24 24"><path d="M5 8c2-4 9-5 13-2s3 9-1 11-9 1-12-1-2-5 0-8z" stroke-dasharray="3 3"/></svg>Лассо
+    </button>
+    <button class="tool" data-tool="brush" aria-pressed="false" title="Кисть (B)">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>Кисть
+    </button>
+  </div>
+  <p class="hint" id="hint"></p>
+  <div class="brushOnly">
+    <label for="brushSize">Размер кисти <output id="brushOut">28</output></label>
+    <input type="range" id="brushSize" min="8" max="80" step="1" value="28">
+  </div>
+
+  <div class="sep"></div>
+  <div class="grid3">
+    <button class="action" id="undo" title="Отменить (Ctrl+Z)">
+      <svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>Назад
+    </button>
+    <button class="action" id="redo" title="Вернуть (Ctrl+Shift+Z)">
+      <svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg>Вперёд
+    </button>
+    <button class="action" id="reset" title="Вернуть исходные границы">
+      <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>Сброс
+    </button>
+  </div>
+</div>
+
+<button id="logToggle" type="button" aria-label="Открыть журнал" aria-expanded="false" title="Журнал захватов (J)">
+  <svg viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>
+</button>
+<aside id="log" class="closed" aria-label="Журнал захватов">
+  <div class="loghead">
+    <span class="title">Журнал захватов</span>
+    <button id="logClose" type="button" aria-label="Закрыть журнал">×</button>
+  </div>
+  <div id="logSummary" hidden></div>
+  <div id="logList"></div>
+  <p id="logEmpty">Пока ничего не захвачено. Обведите территорию лассо или закрасьте кистью.</p>
+</aside>
+
+<div id="picker" role="dialog" aria-modal="true" aria-label="Добавить страну">
+  <div class="pbox">
+    <div class="phead">
+      <input type="search" id="pickSearch" placeholder="Найти страну…" autocomplete="off" spellcheck="false">
+      <button id="pickClose" type="button" aria-label="Закрыть">×</button>
+    </div>
+    <div id="pickMsg"></div>
+    <div id="pickList"></div>
+  </div>
+</div>
+
+<div id="toast" role="status"></div>
+<div id="banner"></div>
+<div id="loader" role="status">
+  <div class="spinner"></div>
+  <p id="loaderText">Загружаем границы…</p>
+  <button id="retry">Повторить</button>
+</div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+   Константы и утилиты
+   ===================================================================== */
+const $ = id => document.getElementById(id);
+
+// Страны, с которых начинается игра, и палитра для добавляемых
+const BASE_COUNTRIES = [
+  {iso:'UKR', name:'Украина', color:'#1688ff'},
+  {iso:'RUS', name:'Россия',  color:'#f04455'}
+];
+const PALETTE = ['#2fbf71','#f5a524','#a66bff','#19c2c2','#ff6bb5','#9acd32','#ff7a45','#5b6cff'];
+const MAX_COUNTRIES = 8;
+
+const MAX_HISTORY    = 40;
+const MIN_CAPTURE_KM2 = 0.05;
+const ANIM_MS        = 900;
+
+// Источники границ: сначала детальные 10m, при неудаче — упрощённые 50m
+const NE = 'nvkelso/natural-earth-vector';
+const GEO_SOURCES = [
+  {res:'10m', url:`https://cdn.jsdelivr.net/gh/${NE}@master/geojson/ne_10m_admin_0_countries.geojson`},
+  {res:'10m', url:`https://raw.githubusercontent.com/${NE}/master/geojson/ne_10m_admin_0_countries.geojson`},
+  {res:'50m', url:`https://cdn.jsdelivr.net/gh/${NE}@master/geojson/ne_50m_admin_0_countries.geojson`},
+  {res:'50m', url:`https://raw.githubusercontent.com/${NE}/master/geojson/ne_50m_admin_0_countries.geojson`}
+];
+const CACHE_KEY = 'borders-10m-v1';
+const CATALOG_KEY = 'catalog-v1';   // список стран для поиска
+
+const FRONT_BOUNDS = [[43.5, 22], [54, 45]];   // Украина и ближние области России
+const WORLD_BOUNDS = [[40, 18], [76, 180]];    // вся игровая арена
+
+const nf = new Intl.NumberFormat('ru-RU', {maximumFractionDigits:0});
+const pf = new Intl.NumberFormat('ru-RU', {minimumFractionDigits:1, maximumFractionDigits:1});
+
+const fc = list => turf.featureCollection(list.filter(Boolean));
+const areaKm2 = x => { try{ return x ? turf.area(x)/1e6 : 0; }catch(_){ return 0; } };
+const nextFrame = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+
+// Геометрические операции. Ошибку не скрываем: иначе территории
+// могли бы «раздвоиться» (у обеих сторон одновременно).
+function unionStrict(a, b){
+  if(!a) return b;
+  if(!b) return a;
+  return turf.union(fc([a, b]));
+}
+function differenceStrict(a, b){
+  if(!a) return null;
+  if(!b) return a;
+  return turf.difference(fc([a, b]));      // null — если ничего не осталось
+}
+function intersectStrict(a, b){
+  if(!a || !b) return null;
+  return turf.intersect(fc([a, b]));
+}
+
+let toastTimer;
+function toast(text, ms = 2000){
+  const el = $('toast');
+  el.textContent = text;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), ms);
+}
+
+/* =====================================================================
+   Карта
+   ===================================================================== */
+const map = L.map('map', {
+  zoomControl:false, zoomSnap:.25, minZoom:2, preferCanvas:true, worldCopyJump:true
+});
+
+// Слои по порядку: подложка → территории → анимация → рисование
+map.createPane('terr').style.zIndex = 350;
+map.createPane('fx').style.zIndex = 380;
+map.createPane('draw').style.zIndex = 460;
+
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom:19,
+  attribution:'Tiles © Esri — Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri Korea, Esri (Thailand), TomTom · границы: Natural Earth'
+}).addTo(map);
+
+L.control.scale({imperial:false, position:'bottomleft'}).addTo(map);
+L.control.zoom({position:'bottomright', zoomInTitle:'Приблизить', zoomOutTitle:'Отдалить'}).addTo(map);
+
+// Кнопки быстрого перехода по карте
+const ViewControl = L.Control.extend({
+  options:{position:'bottomright'},
+  onAdd(){
+    const box = L.DomUtil.create('div', 'leaflet-bar view-ctl');
+    const mk = (label, title, fn) => {
+      const b = L.DomUtil.create('button', '', box);
+      b.type = 'button'; b.textContent = label; b.title = title;
+      b.addEventListener('click', fn);
+    };
+    mk('Фронт', 'Показать Украину и границу', () => fitFront());
+    mk('Вся карта', 'Показать всю арену', () => map.fitBounds(arenaBounds(), {padding:[30,30]}));
+    L.DomEvent.disableClickPropagation(box);
+    return box;
+  }
+});
+map.addControl(new ViewControl());
+
+function fitFront(){
+  map.fitBounds(FRONT_BOUNDS, {paddingTopLeft:[30,96], paddingBottomRight:[30,30]});
+}
+
+/* =====================================================================
+   Состояние
+   ===================================================================== */
+const state = {
+  faction:'UKR',       // ключ (ISO-код) выбранной стороны
+  tool:'pan',
+  brush:28,            // радиус кисти в пикселях экрана
+
+  // Страны, когда-либо добавленные в игру: имя и цвет не теряются при отмене
+  meta:Object.fromEntries(BASE_COUNTRIES.map(c => [c.iso, {name:c.name, color:c.color}])),
+  active:BASE_COUNTRIES.map(c => c.iso),   // страны в игре (порядок = порядок кнопок)
+  log:[],                                  // журнал событий (часть истории)
+  geoms:{},                                // iso → текущая территория (Feature | null)
+
+  initial:null,        // стартовые границы (для сброса)
+  history:[],
+  historyIndex:-1,
+  busy:false,
+
+  // рисование
+  drawing:false,
+  pointerId:null,
+  pts:[],
+  lastPx:null,
+  minStep:4,
+  preview:null,
+  fx:null
+};
+
+const nameOf  = k => (state.meta[k] && state.meta[k].name)  || k;
+const colorOf = k => (state.meta[k] && state.meta[k].color) || '#8d9ca7';
+
+function nextColor(){
+  const used = new Set(Object.values(state.meta).map(m => m.color));
+  return PALETTE.find(c => !used.has(c)) || `hsl(${(Object.keys(state.meta).length * 47) % 360} 70% 55%)`;
+}
+
+// Границы арены: базовый регион плюс добавленные страны (кроме «растянутых» через антимеридиан)
+function arenaBounds(){
+  const b = L.latLngBounds(WORLD_BOUNDS);
+  for(const k of state.active){
+    const g = state.geoms[k];
+    if(!g) continue;
+    const [w, s, e, n] = turf.bbox(g);
+    if(e - w > 200) continue;
+    b.extend([s, w]); b.extend([n, e]);
+  }
+  return b;
+}
+
+// Геометрии никогда не изменяются «на месте» (turf возвращает новые объекты),
+// поэтому в истории хранятся просто ссылки — без тяжёлого JSON-клонирования.
+const snapshot = () => ({active:[...state.active], geoms:{...state.geoms}, log:state.log});
+
+function restore(s){
+  state.active = [...s.active];
+  state.geoms  = {...s.geoms};
+  state.log    = s.log || [];
+  if(!state.active.includes(state.faction)) state.faction = state.active[0];
+  renderFactions();
+  renderLog();
+  redraw();
+}
+
+function commit(){
+  state.history = state.history.slice(0, state.historyIndex + 1);
+  state.history.push(snapshot());
+  if(state.history.length > MAX_HISTORY) state.history.shift();
+  state.historyIndex = state.history.length - 1;
+  renderLog();
+  updateUI();
+}
+
+function undo(){
+  if(state.busy || state.historyIndex <= 0) return;
+  state.historyIndex--;
+  restore(state.history[state.historyIndex]);
+  toast('Шаг отменён', 1200);
+}
+function redo(){
+  if(state.busy || state.historyIndex >= state.history.length - 1) return;
+  state.historyIndex++;
+  restore(state.history[state.historyIndex]);
+  toast('Шаг возвращён', 1200);
+}
+function resetMap(){
+  if(state.busy || !state.initial || state.historyIndex === 0) return;
+  restore(state.initial);
+  commit();                                  // сброс тоже можно отменить
+  toast('Исходные границы возвращены. Сброс можно отменить', 2400);
+}
+
+/* =====================================================================
+   Отрисовка и табло
+   ===================================================================== */
+const terrStyle = k => ({
+  color:colorOf(k), weight:3, opacity:1, fillColor:colorOf(k), fillOpacity:.47
+});
+
+// Слой на каждую страну создаётся при первом обращении
+const layers = {};
+function layerFor(k){
+  if(!layers[k]) layers[k] = L.geoJSON(null, {pane:'terr', interactive:false, style:() => terrStyle(k)}).addTo(map);
+  return layers[k];
+}
+
+function redraw(){
+  const keys = new Set([...Object.keys(layers), ...state.active]);
+  for(const k of keys){
+    const lyr = layerFor(k);
+    lyr.clearLayers();
+    if(state.active.includes(k) && state.geoms[k]) lyr.addData(state.geoms[k]);
+  }
+  updateUI();
+}
+
+// Табло: цветные «чипы» со странами и общая шкала из сегментов
+function syncScore(areas, total){
+  const chips = $('chips'), bar = $('bar');
+  const sig = state.active.join('|') + '#' + state.active.map(colorOf).join('|');
+  if(chips.dataset.sig !== sig){
+    chips.dataset.sig = sig;
+    chips.innerHTML = ''; bar.innerHTML = '';
+    for(const k of state.active){
+      const chip = document.createElement('div');
+      chip.className = 'chip';
+      chip.dataset.k = k;
+      chip.style.setProperty('--c', colorOf(k));
+      chip.innerHTML = '<i class="dot"></i><span class="who"><span class="nm"></span><span class="km"></span></span><b></b>';
+      chip.querySelector('.nm').textContent = nameOf(k);
+      chips.appendChild(chip);
+
+      const seg = document.createElement('i');
+      seg.dataset.k = k;
+      seg.style.background = colorOf(k);
+      bar.appendChild(seg);
+    }
+  }
+  for(const k of state.active){
+    const pct = Math.max(0, Math.min(100, areas[k] / total * 100));
+    const chip = chips.querySelector('[data-k="' + k + '"]');
+    const seg  = bar.querySelector('[data-k="' + k + '"]');
+    if(chip){
+      chip.querySelector('b').textContent  = pf.format(pct) + '%';
+      chip.querySelector('.km').textContent = nf.format(areas[k]) + ' км²';
+    }
+    if(seg) seg.style.width = pct + '%';
+  }
+}
+
+function updateUI(){
+  const areas = {};
+  let total = 0;
+  for(const k of state.active){ areas[k] = areaKm2(state.geoms[k]); total += areas[k]; }
+  syncScore(areas, total || 1);
+
+  $('undo').disabled  = state.busy || state.historyIndex <= 0;
+  $('redo').disabled  = state.busy || state.historyIndex >= state.history.length - 1;
+  $('reset').disabled = state.busy || state.historyIndex <= 0;
+  $('addCountry').disabled = state.busy || state.active.length >= MAX_COUNTRIES;
+}
+
+function setBusy(v){
+  state.busy = v;
+  document.body.classList.toggle('busy', v);
+  updateUI();
+}
+
+/* =====================================================================
+   Анимация захвата — волна от ближайшей точки своей границы
+   ===================================================================== */
+function findSeed(selected, own){
+  const c = turf.centroid(selected);
+  try{
+    if(own){
+      const lines = turf.polygonToLine(own);
+      const list = lines.type === 'FeatureCollection' ? lines.features : [lines];
+      let best = null, bd = Infinity;
+      for(const l of list){
+        const p = turf.nearestPointOnLine(l, c);
+        const d = p.properties.dist;
+        if(d < bd){ bd = d; best = p; }
+      }
+      if(best) return best;
+    }
+  }catch(_){}
+  return c;
+}
+
+function maxDistanceFrom(point, feature){
+  let max = 0;
+  try{
+    turf.coordEach(feature, coord => {
+      const d = turf.distance(point, turf.point(coord), {units:'kilometers'});
+      if(d > max) max = d;
+    });
+  }catch(_){}
+  return Math.max(max, .1);
+}
+
+function clearFx(){
+  if(state.fx){ map.removeLayer(state.fx); state.fx = null; }
+  $('banner').classList.remove('show');
+}
+
+// Волна остаётся на карте после завершения, пока не применены новые границы
+// (clearFx вызывается уже после redraw — так заливка не мигает).
+function animateCapture(selected, side){
+  if(matchMedia('(prefers-reduced-motion: reduce)').matches) return Promise.resolve();
+
+  return new Promise(resolve => {
+    clearFx();
+    state.fx = L.geoJSON(null, {
+      pane:'fx', interactive:false,
+      style:{color:'#fff', weight:2.5, opacity:.95, fillColor:colorOf(side), fillOpacity:.7}
+    }).addTo(map);
+
+    const banner = $('banner');
+    banner.textContent = nameOf(side) + ' продвигается';
+    banner.className = 'show';
+    banner.style.setProperty('--c', colorOf(side));
+
+    const seed = findSeed(selected, state.geoms[side]);
+    const maxD = maxDistanceFrom(seed, selected);
+    const t0 = performance.now();
+
+    const frame = now => {
+      const t = Math.min(1, (now - t0) / ANIM_MS);
+      const k = 1 - Math.pow(1 - t, 3);
+      let reveal = null;
+      try{
+        reveal = t >= 1 ? selected
+          : intersectStrict(selected, turf.buffer(seed, Math.max(.01, maxD*k), {units:'kilometers', steps:24}));
+      }catch(_){ reveal = t >= 1 ? selected : null; }
+
+      state.fx.clearLayers();
+      if(reveal) state.fx.addData(reveal);
+
+      if(t < 1) requestAnimationFrame(frame);
+      else resolve();
+    };
+    requestAnimationFrame(frame);
+  });
+}
+
+/* =====================================================================
+   Захват территории
+   ===================================================================== */
+async function capture(shape){
+  if(state.busy) return;
+
+  const side = state.faction;
+  // Забираем территорию любых других стран, у которых она ещё есть
+  const enemies = state.active.filter(k => k !== side && state.geoms[k]);
+
+  setBusy(true);
+  try{
+    await nextFrame();                       // дать браузеру показать «занято»
+
+    const parts = {};
+    for(const k of enemies){
+      const part = intersectStrict(shape, state.geoms[k]);
+      if(part && areaKm2(part) >= MIN_CAPTURE_KM2) parts[k] = part;
+    }
+    const keys = Object.keys(parts);
+    if(!keys.length){
+      toast(enemies.length === 1
+        ? 'В этой области нет территории: ' + nameOf(enemies[0])
+        : 'В этой области нет чужой территории');
+      return;
+    }
+
+    const selected = keys.map(k => parts[k]).reduce((a, b) => unionStrict(a, b));
+
+    // Сначала считаем итог, потом показываем — при ошибке состояние не меняется.
+    const next = {};
+    for(const k of keys) next[k] = differenceStrict(state.geoms[k], parts[k]);
+    next[side] = unionStrict(state.geoms[side], selected);
+
+    await animateCapture(selected, side);
+
+    const km = areaKm2(selected);
+    const from = {};
+    for(const k of keys) from[k] = areaKm2(parts[k]);
+    const entry = {
+      type:'capture', side, km, from,
+      n:state.log.filter(e => e.type === 'capture').length + 1,
+      places:null, status:'loading'
+    };
+
+    state.geoms = {...state.geoms, ...next};
+    state.log   = [...state.log, entry];
+    redraw();
+    commit();                                  // внутри обновит и журнал
+    clearFx();
+    markUnread();
+
+    toast(nameOf(side) + ' ' + captureVerb(nameOf(side)) + ' ' + kmWord(km), 2800);
+    queuePlaces(entry, selected);              // населённые пункты ищем в фоне
+  }catch(err){
+    console.error(err);
+    clearFx();
+    toast('Не удалось посчитать границы. Попробуйте область проще или меньше', 3500);
+  }finally{
+    setBusy(false);
+  }
+}
+
+/* =====================================================================
+   Журнал захватов: кто, сколько и какие населённые пункты
+   ===================================================================== */
+const OVERPASS = [                        // запрашиваем оба зеркала сразу, берём первый ответ
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter'
+];
+const OSM_TIMEOUT_MS = 20000;            // дольше не ждём — не оставляем «вечный» поиск
+const LOCAL_TIMEOUT_MS = 30000;
+const POP_CACHE_KEY = 'places-ne10-v1';
+const POP_SOURCES = [
+  `https://cdn.jsdelivr.net/gh/${NE}@master/geojson/ne_10m_populated_places.geojson`,
+  `https://raw.githubusercontent.com/${NE}/master/geojson/ne_10m_populated_places.geojson`
+];
+const PLACE_LIMIT = 10000;                // запас для больших областей: не теряем мелкие НП из-за раннего лимита
+const MAX_PLACES_AREA_KM2 = 150000;       // для огромных областей населённые пункты не ищем
+const MAX_SHOWN = 4;                      // сколько названий выводить в самой фразе
+const PLACE_LABELS = {
+  town:['город','города'], place:['населённый пункт','населённые пункты'],
+  village:['село','сёла'], hamlet:['хутор','хутора'],
+  isolated_dwelling:['посёлок','посёлка'], locality:['местность','местности']
+};
+const TYPE_RANK = {city:0, town:1, village:2, hamlet:3, isolated_dwelling:4, locality:5, place:6};
+
+function plural(n, [one, few, many]){
+  const a = Math.abs(n) % 100, d = a % 10;
+  if(a > 10 && a < 20) return many;
+  if(d === 1) return one;
+  if(d >= 2 && d <= 4) return few;
+  return many;
+}
+
+const kmFmt = new Intl.NumberFormat('ru-RU', {maximumFractionDigits:1});
+const kmRound = x => x >= 10 ? Math.round(x) : Math.round(x * 10) / 10;
+const kmShort = x => kmFmt.format(kmRound(x));
+function kmWord(x){
+  const v = kmRound(x);
+  if(!Number.isInteger(v)) return kmFmt.format(v) + ' квадратного километра';
+  return kmFmt.format(v) + ' ' + plural(v, ['квадратный километр', 'квадратных километра', 'квадратных километров']);
+}
+
+// Род страны определяем по названию (для «захватила / захватил / захватили»)
+const GENDER_OVERRIDE = {'Беларусь':'f', 'Израиль':'m', 'США':'p', 'ОАЭ':'p'};
+function captureVerb(name){
+  const n = name.trim();
+  let g = GENDER_OVERRIDE[n];
+  if(!g){
+    if(/республика/i.test(n)) g = 'f';
+    else if(n.length <= 4 && n === n.toUpperCase()) g = 'p';
+    else{
+      const c = n.slice(-1).toLowerCase();
+      g = 'ая'.includes(c) ? 'f' : 'ыи'.includes(c) ? 'p' : 'ое'.includes(c) ? 'n' : 'm';
+    }
+  }
+  return {m:'захватил', f:'захватила', n:'захватило', p:'захватили'}[g];
+}
+
+const joinAnd = parts => parts.length > 1
+  ? parts.slice(0, -1).join(', ') + ' и ' + parts[parts.length - 1]
+  : (parts[0] || '');
+
+function placePhrases(places, limit){
+  const g = {town:[], place:[], village:[], hamlet:[], isolated_dwelling:[], locality:[]};
+  for(const p of places.slice(0, limit)){
+    const k = (p.type === 'city' || p.type === 'town') ? 'town' : (g[p.type] ? p.type : 'place');
+    g[k].push(p.name);
+  }
+  const out = [];
+  for(const k of ['town', 'village', 'hamlet', 'isolated_dwelling', 'locality', 'place']){
+    if(!g[k].length) continue;
+    const [one, many] = PLACE_LABELS[k];
+    out.push((g[k].length === 1 ? one : many) + ' ' + g[k].join(', '));
+  }
+  return out;
+}
+
+// «…захватила 12 квадратных километров и село Нова Маячка»
+function captureTail(e){
+  const parts = [kmWord(e.km)];
+  const pl = e.places || [];
+  if(pl.length){
+    parts.push(...placePhrases(pl, MAX_SHOWN));
+    const rest = pl.length - MAX_SHOWN;
+    if(rest > 0){
+      parts.push('ещё ' + (e.truncated ? 'более ' : '') + rest + ' ' +
+        plural(rest, ['населённый пункт', 'населённых пункта', 'населённых пунктов']));
+    }
+  }
+  return captureVerb(nameOf(e.side)) + ' ' + joinAnd(parts);
+}
+
+/* --- 1) быстро и без сервера: крупные пункты из Natural Earth (кэшируются в браузере) --- */
+let localPlaces = null, localPlacesPromise = null;
+
+function compactPlaces(data){
+  const out = [];
+  for(const f of data.features){
+    const g = f.geometry;
+    if(!g || g.type !== 'Point') continue;
+    const P = {};
+    for(const k in (f.properties || {})) P[k.toLowerCase()] = f.properties[k];   // регистр полей не важен
+    out.push({
+      lon:g.coordinates[0], lat:g.coordinates[1],
+      pop:P.pop_max || P.pop_min || 0, a3:P.adm0_a3 || '',
+      en:P.name || P.nameascii || '', ru:P.name_ru || '', uk:P.name_uk || ''
+    });
+  }
+  return out;
+}
+
+function ensureLocalPlaces(){
+  if(localPlaces) return Promise.resolve(localPlaces);
+  if(!localPlacesPromise){
+    localPlacesPromise = (async () => {
+      let arr = await cacheGet(POP_CACHE_KEY);
+      if(!arr){
+        let lastErr;
+        for(const url of POP_SOURCES){
+          try{ arr = compactPlaces(await fetchJson(url, 45000)); if(arr.length) break; }
+          catch(err){ lastErr = err; console.warn('Не удалось загрузить', url, err); }
+        }
+        if(!arr || !arr.length) throw lastErr || new Error('Нет данных о населённых пунктах');
+        cacheSet(POP_CACHE_KEY, arr);
+      }
+      localPlaces = arr;
+      return arr;
+    })().catch(err => { localPlacesPromise = null; throw err; });
+  }
+  return localPlacesPromise;
+}
+
+// Названия: на землях Украины — украинские, в остальных случаях — русские
+const pickName = p => (p.a3 === 'UKR' ? (p.uk || p.ru || p.en) : (p.ru || p.en));
+
+function localPlacesIn(geom){
+  const [w, s, e, n] = turf.bbox(geom);
+  const seen = new Set(), out = [];
+  for(const p of localPlaces){
+    if(p.lon < w || p.lon > e || p.lat < s || p.lat > n) continue;
+    let inside = false;
+    try{ inside = turf.booleanPointInPolygon([p.lon, p.lat], geom); }catch(_){}
+    if(!inside) continue;
+    const name = pickName(p);
+    if(!name) continue;
+    const key = name + '|' + Number(p.lon).toFixed(4) + '|' + Number(p.lat).toFixed(4);
+    if(seen.has(key)) continue;
+    seen.add(key);
+    out.push({name, type:p.pop >= 15000 ? 'town' : 'place', pop:p.pop, lat:p.lat, lon:p.lon});
+  }
+  out.sort((a, b) => (TYPE_RANK[a.type] - TYPE_RANK[b.type]) || (b.pop - a.pop) || a.name.localeCompare(b.name, 'ru'));
+  return out;
+}
+
+/* --- 2) подробно, но с жёстким лимитом по времени: OpenStreetMap (Overpass API) --- */
+function overpassAreaFilter(geom){
+  const n = x => turf.coordAll(x).length;
+  let g = geom;
+  for(const tol of [0.0005, 0.002, 0.006, 0.02, 0.06]){
+    try{ g = turf.simplify(geom, {tolerance:tol, highQuality:false}); }catch(_){ g = geom; }
+    if(n(g) <= 1200) break;
+  }
+  const rings = [];
+  try{
+    for(const f of turf.flatten(g).features){
+      const ring = f.geometry.coordinates[0];
+      if(ring && ring.length >= 4) rings.push(ring.map(([lon, lat]) => lat.toFixed(5) + ' ' + lon.toFixed(5)).join(' '));
+    }
+  }catch(_){}
+  if(rings.length) return rings.map(r => '(poly:"' + r + '")');
+  const [w, s, e, nn] = turf.bbox(geom);                 // запасной вариант — прямоугольник
+  return ['(' + [s, w, nn, e].join(',') + ')'];
+}
+
+// Запросы к Overpass идут через GET и разбиваются на небольшие квадраты.
+// POST у некоторых браузеров/зеркал режется CORS, из-за чего журнал раньше
+// показывал «не удалось определить».
+async function fetchOverpass(url, query){
+  const target = url + '?data=' + encodeURIComponent(query);
+  const candidates = [
+    target,
+    'https://api.allorigins.win/raw?url=' + encodeURIComponent(target),
+    'https://corsproxy.io/?url=' + encodeURIComponent(target)
+  ];
+  let lastErr = null;
+  for(const requestUrl of candidates){
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), OSM_TIMEOUT_MS);
+    try{
+      const r = await fetch(requestUrl, {
+        method:'GET', signal:ctl.signal,
+        headers:{'Accept':'application/json'}
+      });
+      if(!r.ok) throw new Error(requestUrl + ' → HTTP ' + r.status);
+      const text = await r.text();
+      let j;
+      try{ j = JSON.parse(text); }catch(_){
+        throw new Error('Overpass вернул не JSON');
+      }
+      if(j.remark && /(error|timed out|out of memory)/i.test(j.remark) && !(j.elements || []).length)
+        throw new Error(j.remark);
+      return j;
+    }catch(err){
+      lastErr = err;
+      console.warn('Overpass endpoint failed:', requestUrl, err);
+    }finally{
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr || new Error('Не удалось получить данные Overpass');
+}
+
+async function fetchOsmPlaces(geom){
+  const [w, s, e, n] = turf.bbox(geom);
+  const width = Math.max(0.01, e - w);
+  const height = Math.max(0.01, n - s);
+  // Для небольших захватов 2×2, для больших 3×3 — так Overpass не падает
+  // на огромном bbox и при этом мы не теряем деревни.
+  const grid = Math.max(width, height) > 8 ? 3 : 2;
+  const boxes = [];
+  for(let gy=0; gy<grid; gy++){
+    const y1 = s + height * gy / grid;
+    const y2 = s + height * (gy + 1) / grid;
+    for(let gx=0; gx<grid; gx++){
+      const x1 = w + width * gx / grid;
+      const x2 = w + width * (gx + 1) / grid;
+      boxes.push([x1,y1,x2,y2]);
+    }
+  }
+
+  const sel = '["place"~"^(city|town|village|hamlet|isolated_dwelling|locality)$"]';
+  const tasks = [];
+  for(const url of OVERPASS){
+    for(const [x1,y1,x2,y2] of boxes){
+      const query = '[out:json][timeout:15];node' + sel + '(' +
+        y1.toFixed(5) + ',' + x1.toFixed(5) + ',' + y2.toFixed(5) + ',' + x2.toFixed(5) +
+        ');out body;';
+      tasks.push(fetchOverpass(url, query).catch(err => {
+        console.warn('Overpass:', err);
+        return null;
+      }));
+    }
+  }
+
+  const results = await Promise.all(tasks);
+  const els = [];
+  const rawSeen = new Set();
+  for(const j of results){
+    for(const el of (j?.elements || [])){
+      const key = el.id + '/' + el.version;
+      if(rawSeen.has(key)) continue;
+      rawSeen.add(key);
+      els.push(el);
+    }
+  }
+  if(!els.length) throw new Error('Overpass не вернул населённые пункты');
+
+  const seen = new Set(), places = [];
+  for(const el of els){
+    const t = el.tags;
+    if(el.type !== 'node' || !t || el.lat == null || el.lon == null) continue;
+    const name = t['name:ru'] || t['name:uk'] || t.name || t['name:en'];
+    if(!name) continue;
+    let inside = false;
+    try{ inside = turf.booleanPointInPolygon([el.lon, el.lat], geom); }catch(_){}
+    if(!inside) continue;
+    const type = t.place;
+    const key = String(name).trim().toLocaleLowerCase('ru') + '|' + type;
+    if(seen.has(key)) continue;
+    seen.add(key);
+    places.push({name:String(name).trim(), type, pop:parseInt(t.population,10) || 0});
+  }
+  places.sort((a,b)=>(TYPE_RANK[a.type]??5)-(TYPE_RANK[b.type]??5)||(b.pop-a.pop)||a.name.localeCompare(b.name,'ru'));
+  return {places, truncated:false};
+}
+
+/* --- оркестрация: сначала локальный результат, затем уточнение; всё ограничено по времени --- */
+const entryGeom = new WeakMap();           // область захвата — для кнопки «Повторить»
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
+
+function queuePlaces(entry, geom){
+  entryGeom.set(entry, geom);
+  lookupPlaces(entry, geom);
+}
+function retryPlaces(entry){
+  const g = entryGeom.get(entry);
+  if(g) lookupPlaces(entry, g);
+}
+
+async function lookupPlaces(entry, geom){
+  entry.status = 'loading';
+  entry.source = null;
+  entry.note = '';
+  entry.places = [];
+  entry.truncated = false;
+  entry.refining = entry.km <= MAX_PLACES_AREA_KM2;
+  renderLog();
+
+  // ВАЖНО: оба источника собираются независимо и затем объединяются.
+  // Раньше пустой успешный ответ Overpass считался полноценным результатом
+  // и затирал найденные локальные населённые пункты.
+  const osmPromise = entry.refining ? (async () => {
+    try{
+      return await fetchOsmPlaces(geom);
+    }catch(err){
+      console.warn('OpenStreetMap:', err);
+      return null;
+    }finally{
+      entry.refining = false;
+      renderLog();
+    }
+  })() : Promise.resolve(null);
+
+  const localPromise = (async () => {
+    try{
+      await withTimeout(ensureLocalPlaces(), LOCAL_TIMEOUT_MS);
+      return localPlacesIn(geom);
+    }catch(err){
+      console.warn('Локальные данные:', err);
+      return [];
+    }
+  })();
+
+  const [osmResult, localResult] = await Promise.all([osmPromise, localPromise]);
+
+  const merged = [];
+  const seen = new Set();
+  const addPlaces = (arr) => {
+    for(const p of (arr || [])){
+      if(!p || !p.name) continue;
+      const coordKey = (p.lat != null && p.lon != null) ? ('|' + Number(p.lat).toFixed(4) + '|' + Number(p.lon).toFixed(4)) : '';
+      const key = String(p.name).trim().toLocaleLowerCase('ru') + '|' + (p.type || 'place') + coordKey;
+      if(seen.has(key)) continue;
+      seen.add(key);
+      merged.push(p);
+    }
+  };
+
+  // OSM точнее, локальная база — запасной вариант для мелких НП.
+  addPlaces(osmResult && osmResult.places);
+  addPlaces(localResult);
+
+  merged.sort((a, b) =>
+    (TYPE_RANK[a.type] - TYPE_RANK[b.type]) ||
+    (b.pop - a.pop) ||
+    a.name.localeCompare(b.name, 'ru')
+  );
+
+  entry.places = merged;
+  entry.truncated = !!(osmResult && osmResult.truncated);
+  entry.source = osmResult ? 'osm+local' : (localResult.length ? 'local' : null);
+  entry.status = entry.source ? 'ok' : 'fail';
+
+  if(entry.source === 'osm+local'){
+    entry.note = localResult.length
+      ? 'Показаны найденные города и населённые пункты из OpenStreetMap и локальной базы'
+      : '';
+  }else if(entry.source === 'local'){
+    entry.note = entry.refining
+      ? 'Показаны только крупные населённые пункты'
+      : 'Показаны крупные населённые пункты из локальной базы';
+  }
+
+  renderLog();
+}
+
+/* --- отрисовка журнала --- */
+function renderSummary(){
+  const box = $('logSummary');
+  const caps = state.log.filter(e => e.type === 'capture');
+  box.innerHTML = '';
+  box.hidden = !caps.length;
+  if(!caps.length) return;
+
+  const agg = {};
+  const row = k => agg[k] || (agg[k] = {gain:0, lost:0, places:0});
+  for(const e of caps){
+    const r = row(e.side);
+    r.gain += e.km;
+    r.places += (e.places || []).length;
+    for(const [k, v] of Object.entries(e.from || {})) row(k).lost += v;
+  }
+
+  const mk = (cls, cells) => {
+    const d = document.createElement('div');
+    d.className = 'srow ' + cls;
+    for(const c of cells) d.appendChild(c);
+    return d;
+  };
+  const cell = (cls, text, title) => {
+    const s = document.createElement('span');
+    s.className = cls; s.textContent = text;
+    if(title) s.title = title;
+    return s;
+  };
+  box.appendChild(mk('h', [cell('', 'Страна'), cell('v', 'захвачено, км²'), cell('v', 'потеряно, км²'), cell('v', 'н. п.')]));
+
+  Object.keys(agg).sort((a, b) => agg[b].gain - agg[a].gain).forEach(k => {
+    const r = agg[k];
+    const n = document.createElement('span');
+    n.className = 'n';
+    const dot = document.createElement('i');
+    const nm = document.createElement('span');
+    nm.textContent = nameOf(k);
+    n.append(dot, nm);
+    const line = mk('', [n, cell('v gain', r.gain ? '+' + kmShort(r.gain) : '–'),
+                         cell('v lost', r.lost ? '−' + kmShort(r.lost) : '–'),
+                         cell('v', r.places ? String(r.places) : '–', 'Захвачено населённых пунктов')]);
+    line.style.setProperty('--c', colorOf(k));
+    box.appendChild(line);
+  });
+}
+
+function entryEl(e){
+  const el = document.createElement('div');
+  if(e.type === 'event'){
+    el.className = 'entry event';
+    el.textContent = e.text;
+    return el;
+  }
+
+  el.className = 'entry' + (e.open ? ' open' : '');
+  el.style.setProperty('--c', colorOf(e.side));
+
+  const txt = document.createElement('div');
+  txt.className = 'txt';
+  const b = document.createElement('b');
+  b.textContent = nameOf(e.side);
+  // В основной строке оставляем только площадь захвата.
+  // Населённые пункты выводятся отдельным блоком ниже — так журнал не превращается
+  // в длинную нечитаемую строку.
+  txt.append(b, ' ' + captureVerb(nameOf(e.side)) + ' ' + kmWord(e.km));
+  el.appendChild(txt);
+
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  const lost = Object.entries(e.from || {}).map(([k, v]) => nameOf(k) + ' −' + kmShort(v) + ' км²');
+  meta.append('Ход ' + e.n + (lost.length ? ' · потери: ' + lost.join('; ') : ''));
+  el.appendChild(meta);
+
+  const addNote = (text, wait) => {
+    const s = document.createElement('div');
+    s.className = 'meta' + (wait ? ' wait' : '');
+    s.textContent = text;
+    el.appendChild(s);
+    return s;
+  };
+  if(e.status === 'loading') addNote('Ищем населённые пункты…', true);
+  else if(e.refining) addNote('Уточняем по OpenStreetMap…', true);
+  if(e.status === 'fail'){
+    const s = addNote('Населённые пункты определить не удалось. ');
+    const again = document.createElement('button');
+    again.type = 'button';
+    again.className = 'linkbtn';
+    again.textContent = 'Повторить';
+    again.addEventListener('click', () => retryPlaces(e));
+    s.appendChild(again);
+  }
+  if(e.note) addNote(e.note, false);
+
+  const pl = e.places || [];
+  if(pl.length){
+    const placesBox = document.createElement('div');
+    placesBox.className = 'places-captured';
+
+    const title = document.createElement('div');
+    title.className = 'meta places-title';
+    title.textContent = 'Захваченные населённые пункты: ' + pl.length + (e.truncated ? '+' : '');
+    placesBox.appendChild(title);
+
+    const visible = e.open ? pl : pl.slice(0, MAX_SHOWN);
+    const names = visible.map(p => p.name);
+    const list = document.createElement('div');
+    list.className = 'meta places-list';
+    list.textContent = names.join(', ') + (visible.length < pl.length ? '…' : '');
+    placesBox.appendChild(list);
+
+    if(pl.length > MAX_SHOWN){
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'linkbtn';
+      btn.textContent = e.open ? 'Скрыть список' : 'Показать все (' + pl.length + (e.truncated ? '+' : '') + ')';
+      btn.addEventListener('click', () => { e.open = !e.open; renderLog(); });
+      placesBox.appendChild(btn);
+    }
+    el.appendChild(placesBox);
+  }
+
+  return el;
+}
+
+function renderLog(){
+  const list = $('logList');
+  list.innerHTML = '';
+  $('logEmpty').hidden = state.log.length > 0;
+  renderSummary();
+  for(let i = state.log.length - 1; i >= 0; i--) list.appendChild(entryEl(state.log[i]));
+}
+
+/* =====================================================================
+   Рисование: лассо и кисть (единые pointer-события: мышь, палец, стилус)
+   ===================================================================== */
+const mapEl = map.getContainer();
+const ring = $('ring');
+
+const localPoint = e => {
+  const r = mapEl.getBoundingClientRect();
+  return L.point(e.clientX - r.left, e.clientY - r.top);
+};
+
+function moveRing(e){
+  if(state.tool !== 'brush'){ ring.style.display = 'none'; return; }
+  const d = state.brush * 2;
+  ring.style.display = 'block';
+  ring.style.width = ring.style.height = d + 'px';
+  ring.style.left = (e.clientX - state.brush) + 'px';
+  ring.style.top  = (e.clientY - state.brush) + 'px';
+}
+
+function beginDraw(e){
+  const p = localPoint(e);
+  const ll = map.containerPointToLatLng(p);
+  const brush = state.tool === 'brush';
+
+  state.drawing = true;
+  state.pointerId = e.pointerId;
+  state.pts = [ll];
+  state.lastPx = p;
+  state.minStep = brush ? Math.max(3, state.brush * .25) : 4;
+  map.scrollWheelZoom.disable();
+
+  state.preview = brush
+    ? L.polyline([ll, ll], {pane:'draw', interactive:false, color:colorOf(state.faction),
+        weight:state.brush*2, opacity:.38, lineCap:'round', lineJoin:'round'})
+    : L.polygon([ll, ll, ll], {pane:'draw', interactive:false, color:'#fff', weight:2.5, opacity:.95,
+        dashArray:'6 6', fillColor:'#fff', fillOpacity:.08});
+  state.preview.addTo(map);
+
+  try{ mapEl.setPointerCapture(e.pointerId); }catch(_){}
+  moveRing(e);
+}
+
+function moveDraw(e){
+  const p = localPoint(e);
+  if(p.distanceTo(state.lastPx) < state.minStep) return;
+  state.lastPx = p;
+  state.pts.push(map.containerPointToLatLng(p));
+  state.preview.setLatLngs(state.pts);
+}
+
+function cancelDraw(){
+  state.drawing = false;
+  state.pointerId = null;
+  map.scrollWheelZoom.enable();
+  if(state.preview){ map.removeLayer(state.preview); state.preview = null; }
+}
+
+function lassoShape(pts){
+  if(pts.length < 3) return null;
+  const coords = pts.map(p => { const w = map.wrapLatLng(p); return [w.lng, w.lat]; });
+  coords.push(coords[0]);
+
+  let poly = turf.polygon([coords]);
+  // Самопересечения (восьмёрка, петля) раскладываем на части и объединяем
+  if(turf.kinks(poly).features.length){
+    const parts = turf.unkinkPolygon(poly).features;
+    poly = parts.reduce((acc, f) => acc ? turf.union(fc([acc, f])) : f, null);
+  }
+  return poly;
+}
+
+function brushShape(pts){
+  if(!pts.length) return null;
+  const lat = pts.reduce((s, p) => s + p.lat, 0) / pts.length;
+  // метров в одном пикселе на этой широте и масштабе
+  const mpp = 156543.03392 * Math.cos(lat * Math.PI/180) / Math.pow(2, map.getZoom());
+  const km = state.brush * mpp / 1000;
+  const coords = pts.map(p => { const w = map.wrapLatLng(p); return [w.lng, w.lat]; });
+  const geom = coords.length > 1 ? turf.lineString(coords) : turf.point(coords[0]);
+  return turf.buffer(geom, km, {units:'kilometers', steps:12});
+}
+
+async function endDraw(){
+  const pts = state.pts, tool = state.tool;
+  cancelDraw();
+  if(tool === 'lasso' && pts.length < 3) return;   // просто клик
+
+  let shape = null;
+  try{ shape = tool === 'brush' ? brushShape(pts) : lassoShape(pts); }
+  catch(err){ console.warn(err); }
+
+  if(!shape){ toast('Не удалось построить область'); return; }
+  await capture(shape);
+}
+
+mapEl.addEventListener('pointerdown', e => {
+  if(state.busy || state.tool === 'pan') return;
+  if(state.drawing){ cancelDraw(); return; }             // второй палец — это жест масштаба
+  if(e.target.closest('.leaflet-control')) return;
+  if(e.pointerType === 'mouse' && e.button !== 0) return;
+  e.preventDefault();
+  beginDraw(e);
+}, {passive:false});
+
+mapEl.addEventListener('pointermove', e => {
+  if(state.tool === 'brush') moveRing(e);
+  if(state.drawing && e.pointerId === state.pointerId){
+    e.preventDefault();
+    moveDraw(e);
+  }
+}, {passive:false});
+
+mapEl.addEventListener('pointerup', e => {
+  if(!state.drawing || e.pointerId !== state.pointerId) return;
+  e.preventDefault();
+  try{ mapEl.releasePointerCapture(e.pointerId); }catch(_){}
+  if(e.pointerType !== 'mouse') ring.style.display = 'none';
+  endDraw();
+}, {passive:false});
+
+mapEl.addEventListener('pointercancel', () => { if(state.drawing) cancelDraw(); });
+mapEl.addEventListener('pointerleave', e => { if(!state.drawing || e.pointerType !== 'mouse') ring.style.display = 'none'; });
+mapEl.addEventListener('contextmenu', e => { if(state.tool !== 'pan') e.preventDefault(); });
+
+/* =====================================================================
+   Панель: сторона, инструмент, размер кисти, действия
+   ===================================================================== */
+const HINTS = {
+  pan:'Двигайте и масштабируйте карту.',
+  lasso:'Обведите область: всё, что принадлежит другим странам, перейдёт выбранной стороне. Рисовать можно где угодно.',
+  brush:'Закрашивайте чужую территорию кистью. Размер задаётся в пикселях экрана — приблизьте карту для точности.'
+};
+
+function setFaction(k){
+  if(!state.active.includes(k)) k = state.active[0];
+  state.faction = k;
+  document.documentElement.style.setProperty('--fc', colorOf(k));
+  document.querySelectorAll('.faction').forEach(b => {
+    const on = b.dataset.k === k;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on);
+  });
+}
+
+// Кнопки сторон строятся по списку стран в игре
+function renderFactions(){
+  const box = $('factions');
+  box.innerHTML = '';
+  state.active.forEach((k, i) => {
+    const row = document.createElement('div');
+    row.className = 'frow';
+
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'faction';
+    b.dataset.k = k;
+    b.style.setProperty('--c', colorOf(k));
+    b.innerHTML = '<span class="sw"></span><span class="fname"></span><kbd></kbd>';
+    b.querySelector('.fname').textContent = nameOf(k);
+    b.querySelector('kbd').textContent = i < 9 ? String(i + 1) : '';
+    b.addEventListener('click', () => setFaction(k));
+    row.appendChild(b);
+
+    if(state.active.length > 2){
+      const r = document.createElement('button');
+      r.type = 'button';
+      r.className = 'rm';
+      r.textContent = '×';
+      r.title = 'Убрать страну из игры';
+      r.setAttribute('aria-label', 'Убрать страну: ' + nameOf(k));
+      r.addEventListener('click', () => removeCountry(k));
+      row.appendChild(r);
+    }
+    box.appendChild(row);
+  });
+  setFaction(state.faction);
+}
+
+function setTool(t){
+  if(state.drawing) cancelDraw();
+  state.tool = t;
+  document.body.dataset.tool = t;
+  document.querySelectorAll('.tool').forEach(b => {
+    const on = b.dataset.tool === t;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on);
+  });
+  $('hint').textContent = HINTS[t];
+
+  // В режимах рисования перетаскивание карты выключено — палец/мышь рисуют.
+  // Масштаб (колесо, щипок) остаётся.
+  const pan = t === 'pan';
+  for(const h of [map.dragging, map.boxZoom, map.doubleClickZoom]) pan ? h.enable() : h.disable();
+  mapEl.classList.toggle('tool-draw', !pan);
+  if(t !== 'brush') ring.style.display = 'none';
+}
+
+function setBrush(px){
+  state.brush = Math.max(8, Math.min(80, px));
+  $('brushSize').value = state.brush;
+  $('brushOut').textContent = state.brush;
+}
+
+document.querySelectorAll('.tool').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
+$('brushSize').addEventListener('input', e => setBrush(+e.target.value));
+$('undo').addEventListener('click', undo);
+$('redo').addEventListener('click', redo);
+$('reset').addEventListener('click', resetMap);
+
+const panel = $('panel'), panelToggle = $('panelToggle');
+function setPanel(open){
+  if(open && innerWidth <= 720 && typeof setLog === 'function') setLog(false);
+  panel.classList.toggle('closed', !open);
+  panelToggle.textContent = open ? '×' : '☰';
+  panelToggle.setAttribute('aria-label', open ? 'Закрыть меню' : 'Открыть меню');
+  panelToggle.setAttribute('aria-expanded', open);
+}
+panelToggle.addEventListener('click', () => setPanel(panel.classList.contains('closed')));
+
+// Журнал захватов (правая панель)
+const logEl = $('log'), logToggle = $('logToggle');
+function setLog(open){
+  logEl.classList.toggle('closed', !open);
+  logToggle.classList.toggle('on', open);
+  logToggle.setAttribute('aria-expanded', open);
+  logToggle.setAttribute('aria-label', open ? 'Закрыть журнал' : 'Открыть журнал');
+  if(open){
+    logToggle.classList.remove('unread');
+    if(innerWidth <= 720) setPanel(false);          // на узких экранах панели не должны перекрываться
+  }
+}
+function markUnread(){ if(logEl.classList.contains('closed')) logToggle.classList.add('unread'); }
+logToggle.addEventListener('click', () => setLog(logEl.classList.contains('closed')));
+$('logClose').addEventListener('click', () => setLog(false));
+
+// Горячие клавиши (по e.code — работают и в русской раскладке)
+window.addEventListener('keydown', e => {
+  if(e.code === 'Escape' && $('picker').classList.contains('open')){ closePicker(); return; }
+  if(e.target.tagName === 'INPUT' && e.target.type !== 'range') return;   // печатаем в поиске
+  const mod = e.ctrlKey || e.metaKey;
+  if(mod && e.code === 'KeyZ'){ e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if(mod && e.code === 'KeyY'){ e.preventDefault(); redo(); return; }
+  if(mod || e.altKey) return;
+  if(/^Digit[1-9]$/.test(e.code)){
+    const k = state.active[+e.code.slice(5) - 1];
+    if(k) setFaction(k);
+    return;
+  }
+  switch(e.code){
+    case 'Escape':       cancelDraw(); break;
+    case 'KeyV':         setTool('pan'); break;
+    case 'KeyL':         setTool('lasso'); break;
+    case 'KeyB':         setTool('brush'); break;
+    case 'KeyJ':         setLog(logEl.classList.contains('closed')); break;
+    case 'BracketLeft':  setBrush(state.brush - 4); break;
+    case 'BracketRight': setBrush(state.brush + 4); break;
+  }
+});
+
+/* =====================================================================
+   Загрузка границ
+   ===================================================================== */
+/* --- кэш в IndexedDB (работает и при открытии файла с диска) --- */
+function idbOpen(){
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('geofront', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function cacheGet(key){
+  try{
+    const db = await idbOpen();
+    return await new Promise((res, rej) => {
+      const q = db.transaction('kv').objectStore('kv').get(key);
+      q.onsuccess = () => res(q.result || null);
+      q.onerror = () => rej(q.error);
+    });
+  }catch(_){ return null; }
+}
+async function cacheSet(key, val){
+  try{
+    const db = await idbOpen();
+    await new Promise((res, rej) => {
+      const tx = db.transaction('kv', 'readwrite');
+      tx.objectStore('kv').put(val, key);
+      tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+    });
+  }catch(_){}
+}
+
+async function fetchJson(url, timeoutMs = 120000){
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);   // 10m-файл тяжёлый
+  try{
+    const r = await fetch(url, {signal:ctrl.signal});
+    if(!r.ok) throw new Error(url + ' → ' + r.status);
+    return await r.json();
+  }finally{ clearTimeout(timer); }
+}
+
+const isoOf = p =>
+  (p.ADM0_A3 && p.ADM0_A3 !== '-99') ? p.ADM0_A3 : ((p.ISO_A3 && p.ISO_A3 !== '-99') ? p.ISO_A3 : null);
+const stripFeature = f => ({type:'Feature', properties:{}, geometry:f.geometry});
+const featKey = iso => 'country-v1:' + iso;
+
+async function cacheSetMany(entries){
+  try{
+    const db = await idbOpen();
+    await new Promise((res, rej) => {
+      const tx = db.transaction('kv', 'readwrite');
+      const st = tx.objectStore('kv');
+      for(const [k, v] of entries) st.put(v, k);
+      tx.oncomplete = res;
+      tx.onerror = tx.onabort = () => rej(tx.error);
+    });
+    return true;
+  }catch(_){ return false; }
+}
+
+// Скачивает мировой набор границ: сначала детальный 10m, потом упрощённый 50m
+async function fetchDataset(report){
+  let lastErr;
+  for(const s of GEO_SOURCES){
+    try{
+      if(report) report(s.res);
+      const data = await fetchJson(s.url);
+      return {res:s.res, data};
+    }catch(err){
+      lastErr = err;
+      console.warn('Не удалось загрузить', s.url, err);
+    }
+  }
+  throw lastErr;
+}
+
+// Раскладывает набор по странам в IndexedDB: индекс для поиска + геометрия каждой страны отдельно
+async function storeCatalog(data, res){
+  const seen = new Set(), index = [], entries = [];
+  for(const f of data.features){
+    const iso = isoOf(f.properties);
+    if(!iso || seen.has(iso) || !f.geometry) continue;
+    seen.add(iso);
+    index.push({iso, name:f.properties.NAME_RU || f.properties.NAME || iso, nameEn:f.properties.NAME || ''});
+    entries.push([featKey(iso), {res, feature:stripFeature(f)}]);
+  }
+  entries.push([CATALOG_KEY, index]);
+  const ok = await cacheSetMany(entries);
+  return {index, ok};
+}
+
+// Возвращает {res, ukraine, russia}
+async function loadBorders(){
+  const cached = await cacheGet(CACHE_KEY);
+  if(cached && cached.ukraine && cached.russia) return cached;
+
+  const {res, data} = await fetchDataset(r => {
+    $('loaderText').textContent = r === '10m'
+      ? 'Загружаем точные границы (при первом запуске это может занять до минуты)…'
+      : 'Загружаем упрощённые границы…';
+  });
+  const find = iso => data.features.find(f => f.properties.ADM0_A3 === iso)
+                   || data.features.find(f => f.properties.ISO_A3 === iso);
+  const ukr = find('UKR'), rus = find('RUS');
+  if(!ukr || !rus) throw new Error('В данных не найдены UKR/RUS');
+
+  const out = {res, ukraine:stripFeature(ukr), russia:stripFeature(rus)};
+  if(res === '10m') cacheSet(CACHE_KEY, out);           // упрощённые не кэшируем
+
+  // Остальные страны сохраняем про запас — чтобы добавление страны работало мгновенно
+  setTimeout(() => storeCatalog(data, res).catch(() => {}), 1500);
+  return out;
+}
+
+/* --- добавление и удаление стран --- */
+let catalog = null, catalogPromise = null, memDataset = null;
+
+function ensureCatalog(){
+  if(catalog) return Promise.resolve(catalog);
+  if(!catalogPromise){
+    catalogPromise = (async () => {
+      let idx = await cacheGet(CATALOG_KEY);
+      if(!idx){
+        const ds = await fetchDataset();
+        const stored = await storeCatalog(ds.data, ds.res);
+        idx = stored.index;
+        if(!stored.ok) memDataset = ds;                 // IndexedDB недоступна — держим в памяти
+      }
+      catalog = idx;
+      return idx;
+    })().catch(err => { catalogPromise = null; throw err; });
+  }
+  return catalogPromise;
+}
+
+async function getCountryFeature(iso){
+  const rec = await cacheGet(featKey(iso));
+  if(rec && rec.feature) return rec.feature;
+  if(!memDataset){
+    memDataset = await fetchDataset();
+    await storeCatalog(memDataset.data, memDataset.res);
+  }
+  const f = memDataset.data.features.find(f => isoOf(f.properties) === iso);
+  return f ? stripFeature(f) : null;
+}
+
+const norm = s => String(s || '').toLowerCase().replace(/ё/g, 'е');
+
+function renderPicker(){
+  const q = norm($('pickSearch').value.trim());
+  const taken = new Set(state.active);
+  const items = (catalog || [])
+    .filter(c => !taken.has(c.iso) &&
+      (!q || norm(c.name).includes(q) || norm(c.nameEn).includes(q) || c.iso.toLowerCase() === q))
+    .sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+    .slice(0, 120);
+
+  const list = $('pickList');
+  list.innerHTML = '';
+  $('pickMsg').textContent = items.length ? '' : 'Ничего не найдено';
+  for(const c of items){
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'pitem';
+    const n = document.createElement('span'); n.textContent = c.name;
+    const s = document.createElement('small'); s.textContent = (c.nameEn && c.nameEn !== c.name) ? c.nameEn : '';
+    b.append(n, s);
+    b.addEventListener('click', () => addCountry(c.iso));
+    list.appendChild(b);
+  }
+}
+
+async function openPicker(){
+  if(state.busy || state.active.length >= MAX_COUNTRIES) return;
+  $('picker').classList.add('open');
+  $('pickSearch').value = '';
+  $('pickList').innerHTML = '';
+  $('pickMsg').textContent = 'Загружаем список стран…';
+  try{
+    await ensureCatalog();
+    renderPicker();
+    $('pickSearch').focus();
+  }catch(err){
+    console.error(err);
+    $('pickMsg').textContent = 'Не удалось загрузить список стран. Проверьте подключение и попробуйте ещё раз.';
+  }
+}
+function closePicker(){ $('picker').classList.remove('open'); }
+
+async function addCountry(iso){
+  if(state.busy || state.active.includes(iso)) return;
+  if(state.active.length >= MAX_COUNTRIES){ toast('Максимум стран в игре: ' + MAX_COUNTRIES); return; }
+
+  const entry = (catalog || []).find(c => c.iso === iso);
+  setBusy(true);
+  $('pickMsg').textContent = 'Загружаем границы…';
+  try{
+    let feat = await getCountryFeature(iso);
+    if(!feat) throw new Error('Нет геометрии для ' + iso);
+
+    // Страна уже была в игре и её земли могли захватить — не создаём наложений
+    if(state.meta[iso]){
+      for(const k of state.active){
+        if(state.geoms[k] && feat) feat = differenceStrict(feat, state.geoms[k]);
+      }
+    }
+    if(!state.meta[iso]) state.meta[iso] = {name:entry ? entry.name : iso, color:nextColor()};
+
+    state.active = [...state.active, iso];
+    state.geoms  = {...state.geoms, [iso]:feat};
+    state.log    = [...state.log, {type:'event', text:'Добавлена страна: ' + nameOf(iso)}];
+    renderFactions();
+    setFaction(iso);
+    redraw();
+    commit();
+    closePicker();
+    toast('Добавлена страна: ' + nameOf(iso), 2200);
+
+    // Показать новую страну (кроме гигантов, растянутых через антимеридиан)
+    if(feat){
+      const [w, s, e, n] = turf.bbox(feat);
+      if(e - w < 200) map.fitBounds([[s, w], [n, e]], {maxZoom:7, paddingTopLeft:[30,96], paddingBottomRight:[30,30]});
+    }
+  }catch(err){
+    console.error(err);
+    $('pickMsg').textContent = 'Не удалось добавить страну. Попробуйте ещё раз.';
+  }finally{
+    setBusy(false);
+  }
+}
+
+function removeCountry(k){
+  if(state.busy || state.active.length <= 2) return;
+  state.active = state.active.filter(x => x !== k);
+  state.geoms  = {...state.geoms, [k]:null};          // остаток её территории исчезает с карты
+  if(state.faction === k) state.faction = state.active[0];
+  state.log = [...state.log, {type:'event', text:'Страна убрана из игры: ' + nameOf(k)}];
+  renderFactions();
+  redraw();
+  commit();
+  toast('Страна убрана из игры: ' + nameOf(k) + '. Это можно отменить', 2600);
+}
+
+async function init(){
+  const loader = $('loader');
+  loader.className = '';
+  $('loaderText').textContent = 'Загружаем границы…';
+
+  try{
+    if(typeof L === 'undefined' || typeof turf === 'undefined')
+      throw new Error('Не загрузились библиотеки Leaflet/Turf');
+
+    const b = await loadBorders();
+
+    state.active = BASE_COUNTRIES.map(c => c.iso);
+    state.geoms  = {UKR:b.ukraine, RUS:b.russia};
+    state.faction = 'UKR';
+    state.log = [];
+    state.initial = snapshot();
+    state.history = [snapshot()];
+    state.historyIndex = 0;
+
+    renderFactions();
+    redraw();
+    fitFront();
+    loader.classList.add('hide');
+    setTimeout(() => ensureLocalPlaces().catch(() => {}), 6000);   // подготовим список населённых пунктов заранее
+    if(b.res === '10m') toast('Готово. Выберите «Лассо» или «Кисть» и захватывайте территорию', 3200);
+    else toast('Загружены упрощённые границы: на крупном масштабе будут неточности. Обновите страницу, чтобы повторить загрузку точных', 6000);
+  }catch(err){
+    console.error(err);
+    loader.className = 'error';
+    $('loaderText').textContent = 'Не удалось загрузить границы стран. Проверьте подключение к интернету и повторите.';
+  }
+}
+
+$('retry').addEventListener('click', init);
+
+$('addCountry').addEventListener('click', openPicker);
+$('pickClose').addEventListener('click', closePicker);
+$('picker').addEventListener('click', e => { if(e.target === $('picker')) closePicker(); });
+$('pickSearch').addEventListener('input', renderPicker);
+
+renderFactions();
+setTool('pan');
+setBrush(28);
+setPanel(innerWidth > 720);
+setLog(innerWidth > 1100);
+renderLog();
+updateUI();
+init();
+</script>
+</body>
+</html>
