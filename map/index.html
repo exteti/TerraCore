@@ -40,13 +40,12 @@ body.busy .leaflet-container{cursor:progress}
 .leaflet-control-attribution{background:rgba(10,16,21,.78)!important;color:#aab6be!important;font-size:10px!important}
 .leaflet-control-attribution a{color:#a9d0ff!important}
 .leaflet-bar{border:1px solid var(--line)!important;border-radius:10px!important;overflow:hidden;box-shadow:0 6px 18px rgba(0,0,0,.4)!important}
-.leaflet-bar a,.view-ctl button{
+.leaflet-bar a{
   background:var(--panel-2)!important;color:var(--ink)!important;
   border:0!important;border-bottom:1px solid var(--line)!important;
 }
-.leaflet-bar a:last-child,.view-ctl button:last-child{border-bottom:0!important}
-.leaflet-bar a:hover,.view-ctl button:hover{background:var(--panel-3)!important}
-.view-ctl button{display:block;width:100%;min-width:34px;height:32px;padding:0 10px;font-size:12px;cursor:pointer;white-space:nowrap}
+.leaflet-bar a:last-child{border-bottom:0!important}
+.leaflet-bar a:hover{background:var(--panel-3)!important}
 .leaflet-control-scale-line{background:rgba(10,16,21,.72)!important;color:var(--ink)!important;border-color:var(--mute)!important;font-size:10px}
 
 /* ---------- Табло ---------- */
@@ -363,8 +362,8 @@ body{background:#070b10}
 
 /* Leaflet controls */
 .leaflet-bar{border-radius:12px!important;border-color:rgba(177,199,218,.20)!important;box-shadow:0 12px 30px rgba(0,0,0,.35)!important;overflow:hidden}
-.leaflet-bar a,.view-ctl button{background:rgba(10,17,24,.88)!important}
-.leaflet-bar a:hover,.view-ctl button:hover{background:rgba(29,42,54,.96)!important}
+.leaflet-bar a{background:rgba(10,17,24,.88)!important}
+.leaflet-bar a:hover{background:rgba(29,42,54,.96)!important}
 .leaflet-control-attribution{background:rgba(7,12,17,.76)!important}
 
 @media(max-width:560px){
@@ -443,10 +442,8 @@ body[data-theme="light"] #toast,
 body[data-theme="light"] #banner{background:#fff!important;border-color:#cbd5dc!important;color:#17212a!important;box-shadow:0 16px 40px rgba(35,55,68,.18)!important}
 body[data-theme="light"] #loader{background:rgba(244,248,250,.92)!important;color:#17212a!important}
 body[data-theme="light"] .spinner{border-color:#cbd5dc!important;border-top-color:#1688ff!important}
-body[data-theme="light"] .leaflet-bar a,
-body[data-theme="light"] .view-ctl button{background:#fff!important;color:#344652!important;border-color:#cbd5dc!important}
-body[data-theme="light"] .leaflet-bar a:hover,
-body[data-theme="light"] .view-ctl button:hover{background:#e8f0f4!important;color:#0876dc!important}
+body[data-theme="light"] .leaflet-bar a{background:#fff!important;color:#344652!important;border-color:#cbd5dc!important}
+body[data-theme="light"] .leaflet-bar a:hover{background:#e8f0f4!important;color:#0876dc!important}
 body[data-theme="light"] .leaflet-control-attribution{background:rgba(255,255,255,.82)!important;color:#657582!important}
 body[data-theme="light"] .leaflet-control-attribution a{color:#0876dc!important}
 body[data-theme="light"] .leaflet-control-scale-line{background:rgba(255,255,255,.82)!important;color:#344652!important;border-color:#7f929e!important}
@@ -627,8 +624,6 @@ const CACHE_KEY = 'borders-10m-v1';
 const CATALOG_KEY = 'catalog-v1';   // список стран для поиска
 
 const FRONT_BOUNDS = [[43.5, 22], [54, 45]];   // Украина и ближние области России
-const WORLD_BOUNDS = [[40, 18], [76, 180]];    // вся игровая арена
-
 const nf = new Intl.NumberFormat('ru-RU', {maximumFractionDigits:0});
 const pf = new Intl.NumberFormat('ru-RU', {minimumFractionDigits:1, maximumFractionDigits:1});
 
@@ -682,24 +677,6 @@ L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_M
 L.control.scale({imperial:false, position:'bottomleft'}).addTo(map);
 L.control.zoom({position:'bottomright', zoomInTitle:'Приблизить', zoomOutTitle:'Отдалить'}).addTo(map);
 
-// Кнопки быстрого перехода по карте
-const ViewControl = L.Control.extend({
-  options:{position:'bottomright'},
-  onAdd(){
-    const box = L.DomUtil.create('div', 'leaflet-bar view-ctl');
-    const mk = (label, title, fn) => {
-      const b = L.DomUtil.create('button', '', box);
-      b.type = 'button'; b.textContent = label; b.title = title;
-      b.addEventListener('click', fn);
-    };
-    mk('Фронт', 'Показать Украину и границу', () => fitFront());
-    mk('Вся карта', 'Показать всю арену', () => map.fitBounds(arenaBounds(), {padding:[30,30]}));
-    L.DomEvent.disableClickPropagation(box);
-    return box;
-  }
-});
-map.addControl(new ViewControl());
-
 function fitFront(){
   map.fitBounds(FRONT_BOUNDS, {paddingTopLeft:[30,96], paddingBottomRight:[30,30]});
 }
@@ -739,19 +716,6 @@ const colorOf = k => (state.meta[k] && state.meta[k].color) || '#8d9ca7';
 function nextColor(){
   const used = new Set(Object.values(state.meta).map(m => m.color));
   return PALETTE.find(c => !used.has(c)) || `hsl(${(Object.keys(state.meta).length * 47) % 360} 70% 55%)`;
-}
-
-// Границы арены: базовый регион плюс добавленные страны (кроме «растянутых» через антимеридиан)
-function arenaBounds(){
-  const b = L.latLngBounds(WORLD_BOUNDS);
-  for(const k of state.active){
-    const g = state.geoms[k];
-    if(!g) continue;
-    const [w, s, e, n] = turf.bbox(g);
-    if(e - w > 200) continue;
-    b.extend([s, w]); b.extend([n, e]);
-  }
-  return b;
 }
 
 // Геометрии никогда не изменяются «на месте» (turf возвращает новые объекты),
