@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>GeoFront — территориальная игра</title>
+<title>TerraCore — территориальная игра</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -201,7 +201,7 @@ input[type=range]{width:100%;accent-color:var(--fc)}
 .srow .n i{width:8px;height:8px;border-radius:50%;background:var(--c);flex:none}
 .srow .n span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .srow .v{text-align:right;font-variant-numeric:tabular-nums}
-.srow .gain{color:#7fd99b}
+.srow .gain{color:#8cc4ff}
 .srow .lost{color:#ff8b95}
 #logList{overflow:auto;padding:10px 12px 12px}
 #logEmpty{margin:0;padding:4px 16px 16px;font-size:12.5px;line-height:1.45;color:var(--mute)}
@@ -255,6 +255,222 @@ input[type=range]{width:100%;accent-color:var(--fc)}
 @media(prefers-reduced-motion:reduce){
   *{transition:none!important;animation-duration:.01ms!important}
 }
+
+/* ================================================================
+   TERRACORE UI — tactical glass / command-center skin
+   Visual layer only: existing IDs, handlers and game logic preserved.
+   ================================================================ */
+:root{
+  --gap:14px;
+  --topH:64px;
+  --bg:#070b10;
+  --panel:rgba(8,13,19,.82);
+  --panel-2:rgba(15,22,30,.88);
+  --panel-3:rgba(24,34,44,.94);
+  --line:rgba(148,170,190,.18);
+  --line-2:rgba(177,199,218,.30);
+  --ink:#f2f6f9;
+  --mute:#81909d;
+  --accent:#5db2ff;
+  --shadow:0 18px 55px rgba(0,0,0,.42);
+}
+body{background:#070b10}
+#map{background:#111820}
+.leaflet-tile{filter:brightness(.38) contrast(1.22) saturate(.52)}
+
+/* Top command bar */
+#top{
+  height:64px; left:14px; right:14px; top:14px; padding:0 16px;
+  border:1px solid rgba(180,205,225,.20); border-radius:18px;
+  background:linear-gradient(180deg,rgba(12,19,27,.90),rgba(7,12,18,.82));
+  box-shadow:0 14px 45px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.055);
+  backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
+}
+.logo{font-size:16px;letter-spacing:.38em;color:#fff;position:relative;padding-right:18px}
+.score{gap:7px}
+.chips{gap:10px}
+.chip{padding:6px 9px;border:1px solid rgba(255,255,255,.055);border-radius:10px;background:rgba(255,255,255,.025)}
+.chip .dot{width:7px;height:7px;box-shadow:0 0 12px color-mix(in srgb,var(--c) 65%,transparent)}
+.chip b{font-size:15px}
+.nm{font-size:11px;letter-spacing:.02em}
+.km{font-size:9px}
+.bar{height:5px;background:rgba(255,255,255,.06);border-radius:99px}
+
+/* Floating controls */
+#panelToggle,#logToggle{
+  width:46px;height:46px;border-radius:14px;
+  border:1px solid rgba(177,199,218,.24);background:rgba(8,14,20,.84);
+  box-shadow:0 12px 30px rgba(0,0,0,.40),inset 0 1px 0 rgba(255,255,255,.04);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+}
+#panelToggle{top:calc(var(--gap) + var(--topH) + 14px)}
+#logToggle{top:calc(var(--gap) + var(--topH) + 14px)}
+#panelToggle:hover,#logToggle:hover,#logToggle.on{background:rgba(25,36,47,.94);border-color:rgba(145,196,236,.45)}
+
+/* Side command panels */
+#panel,#log{
+  border:1px solid rgba(177,199,218,.19);border-radius:18px;
+  background:linear-gradient(180deg,rgba(10,16,23,.90),rgba(7,12,17,.84));
+  box-shadow:var(--shadow),inset 0 1px 0 rgba(255,255,255,.035);
+  backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+}
+#panel{top:calc(var(--gap) + var(--topH) + 72px);width:270px;padding:16px}
+#log{top:calc(var(--gap) + var(--topH) + 72px);width:min(370px,calc(100% - 28px))}
+.title{font-size:10px;text-transform:uppercase;letter-spacing:.16em;font-weight:800;color:#71818e;margin-bottom:10px}
+.sep{background:rgba(255,255,255,.08);margin:16px 0}
+
+.faction,.tool,.action,.addc,.rm{
+  border-color:rgba(177,199,218,.17);background:rgba(17,25,34,.80);border-radius:13px;
+}
+.faction:hover,.tool:hover,.action:hover,.addc:hover,.rm:hover{background:rgba(29,41,53,.96);border-color:rgba(177,209,235,.38)}
+.faction{padding:10px 11px}
+.faction .sw{width:10px;height:10px;box-shadow:0 0 12px color-mix(in srgb,var(--c) 45%,transparent)}
+.faction.active{background:linear-gradient(90deg,color-mix(in srgb,var(--c) 20%,#0e151d),rgba(20,29,38,.92));border-color:color-mix(in srgb,var(--c) 75%,white 0%);box-shadow:inset 3px 0 0 var(--c),inset 0 1px 0 rgba(255,255,255,.04)}
+.addc{height:40px;font-size:12px;color:#b8c5ce}
+.tool,.action{height:64px;font-size:11px;letter-spacing:.02em}
+.tool svg,.action svg{width:20px;height:20px}
+.tool.active{background:rgba(74,92,108,.55);border-color:#a9c4d7;box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
+.hint{font-size:11px;color:#748490}
+.brushOnly{margin-top:13px}
+
+/* Journal */
+.loghead{padding:14px 14px 7px}
+#logSummary{padding:4px 14px 11px}
+.srow{font-size:12px}
+.entry{padding:10px 11px;background:rgba(16,24,32,.86);border-radius:0 12px 12px 0;border-left-width:3px;box-shadow:inset 0 1px 0 rgba(255,255,255,.025)}
+.entry .txt{font-size:13px}
+.entry .meta{font-size:10.5px}
+
+/* Country picker */
+#picker{background:rgba(2,5,8,.70);backdrop-filter:blur(5px)}
+.pbox{width:min(460px,100%);border-radius:20px;border-color:rgba(180,205,225,.24);background:rgba(8,14,20,.94);box-shadow:0 30px 90px rgba(0,0,0,.68)}
+.phead{padding:14px;border-bottom-color:rgba(255,255,255,.08)}
+.phead input{height:42px;border-radius:12px;background:rgba(19,28,37,.92);border-color:rgba(177,199,218,.18);font-size:14px}
+.phead button{height:42px;width:42px;border-radius:12px;background:rgba(19,28,37,.92)}
+.pitem{padding:11px 13px;border-radius:11px}
+.pitem:hover,.pitem:focus-visible{background:rgba(35,49,62,.88)}
+
+/* Toast/banner/loader */
+#toast{bottom:24px;border-radius:14px;border-color:rgba(177,199,218,.20);background:rgba(7,12,17,.94);box-shadow:0 18px 50px rgba(0,0,0,.55);backdrop-filter:blur(16px)}
+#banner{border-radius:14px;background:rgba(8,14,20,.94);border-color:rgba(177,199,218,.24);box-shadow:0 14px 38px rgba(0,0,0,.45);backdrop-filter:blur(16px)}
+#loader{background:rgba(4,8,12,.90);backdrop-filter:blur(8px)}
+.spinner{width:38px;height:38px;border-width:2px;border-top-color:#bfe1ff;box-shadow:0 0 28px rgba(93,178,255,.12)}
+
+/* Leaflet controls */
+.leaflet-bar{border-radius:12px!important;border-color:rgba(177,199,218,.20)!important;box-shadow:0 12px 30px rgba(0,0,0,.35)!important;overflow:hidden}
+.leaflet-bar a,.view-ctl button{background:rgba(10,17,24,.88)!important}
+.leaflet-bar a:hover,.view-ctl button:hover{background:rgba(29,42,54,.96)!important}
+.leaflet-control-attribution{background:rgba(7,12,17,.76)!important}
+
+@media(max-width:560px){
+  :root{--gap:8px;--topH:54px}
+  #top{left:8px;right:8px;top:8px;height:54px;padding:0 10px;border-radius:15px}
+  #panelToggle,#logToggle{top:calc(var(--gap) + var(--topH) + 8px);width:42px;height:42px}
+  #panelToggle{left:8px} #logToggle{right:8px}
+  #panel,#log{top:calc(var(--gap) + var(--topH) + 58px)}
+  #panel{width:244px}
+}
+
+</style>
+
+<style>
+/* ================================================================
+   MAP THEME SWITCHER — dark (default) / light
+   ================================================================ */
+#themeToggle{
+  flex:0 0 38px!important; display:flex!important; align-items:center!important; justify-content:center!important;
+  width:38px!important; min-width:38px!important; height:38px!important; padding:0!important;
+  border:1px solid rgba(177,199,218,.22)!important; border-radius:11px!important;
+  background:rgba(15,24,32,.86)!important; color:#b8c5ce!important;
+  cursor:pointer!important; font:700 10px/1 var(--font)!important; letter-spacing:.04em!important;
+  box-shadow:0 8px 22px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.04)!important;
+  transition:background .18s,border-color .18s,color .18s,transform .18s!important;
+}
+#themeToggle:hover{background:#1d2a36!important;border-color:rgba(93,178,255,.48)!important;color:#f2f6f9!important}
+#themeToggle:active{transform:scale(.97)!important}
+#themeToggle .themeIcon{font-size:15px;line-height:1}
+#themeToggle .themeLabel{display:none!important}
+
+body[data-theme="light"]{
+  --tc-bg:#cbd3d9; --tc-panel:rgba(229,235,239,.96); --tc-panel2:#dce3e8;
+  --tc-line:#aebbc4; --tc-text:#18242c; --tc-muted:#526572;
+}
+body[data-theme="light"] #map{filter:saturate(.72) contrast(1.04) brightness(.92)!important}
+body[data-theme="light"] #map:after{background:radial-gradient(circle at 52% 48%,transparent 0 42%,rgba(210,220,226,.16) 100%)!important}
+body[data-theme="light"] .leaflet-tile{filter:brightness(.94) contrast(1.03) saturate(.72)!important}
+body[data-theme="light"] #top{background:rgba(222,229,234,.95)!important;border-color:rgba(65,89,105,.30)!important;box-shadow:0 14px 45px rgba(35,55,68,.22),inset 0 1px 0 rgba(255,255,255,.65)!important}
+body[data-theme="light"] .logo{color:#0876dc!important;text-shadow:none!important}
+body[data-theme="light"] #top:before{color:#7b8b97!important}
+body[data-theme="light"] .chip{background:rgba(255,255,255,.32)!important;border-color:rgba(30,55,70,.16)!important}
+body[data-theme="light"] .bar{background:#b9c4cb!important;border-color:#9eacb5!important}
+body[data-theme="light"] #themeToggle{background:#edf1f3!important;border-color:#aebbc4!important;color:#344652!important}
+body[data-theme="light"] #themeToggle:hover{background:#eaf2f7!important;border-color:#75b7eb!important;color:#0b6fc8!important}
+body[data-theme="light"] #panel,
+body[data-theme="light"] #log{background:linear-gradient(180deg,rgba(229,235,239,.98),rgba(211,221,227,.97))!important;border-color:#aebbc4!important;box-shadow:18px 20px 60px rgba(35,55,68,.22)!important}
+body[data-theme="light"] #panel:before{border-bottom-color:#d7e0e5!important}
+body[data-theme="light"] .faction,
+body[data-theme="light"] .tool,
+body[data-theme="light"] .action,
+body[data-theme="light"] .rm{background:#dfe6ea!important;border-color:#aebbc4!important;color:#334651!important}
+body[data-theme="light"] .faction:hover,
+body[data-theme="light"] .tool:hover,
+body[data-theme="light"] .action:hover,
+body[data-theme="light"] .rm:hover{background:#e8f0f4!important;border-color:#aebec8!important;color:#17212a!important}
+body[data-theme="light"] .tool.active{background:#e3f0f9!important;color:#0876dc!important;border-color:#5db2ff!important}
+body[data-theme="light"] .addc{color:#fff!important}
+body[data-theme="light"] .sep{background:#d7e0e5!important}
+body[data-theme="light"] .hint{color:#657582!important}
+body[data-theme="light"] .brushOnly{background:#dfe6ea!important;border-color:#aebbc4!important}
+body[data-theme="light"] #logToggle,
+body[data-theme="light"] #panelToggle{background:#fff!important;border-color:#c2cfd7!important;color:#0876dc!important;box-shadow:0 10px 25px rgba(35,55,68,.16)!important}
+body[data-theme="light"] #logToggle:hover,
+body[data-theme="light"] #panelToggle:hover{background:#eaf2f7!important}
+body[data-theme="light"] .loghead{border-bottom-color:#d7e0e5!important}
+body[data-theme="light"] .entry,
+body[data-theme="light"] .event{background:#eef3f6!important}
+body[data-theme="light"] #picker .pbox{background:rgba(255,255,255,.97)!important;border-color:#c5d1d8!important;box-shadow:0 30px 90px rgba(35,55,68,.24)!important}
+body[data-theme="light"] .phead{border-bottom-color:#d7e0e5!important}
+body[data-theme="light"] .phead input,
+body[data-theme="light"] .phead button{background:#f3f7f9!important;border-color:#cbd5dc!important;color:#17212a!important}
+body[data-theme="light"] .pitem:hover,
+body[data-theme="light"] .pitem:focus-visible{background:#e8f0f4!important}
+body[data-theme="light"] #toast,
+body[data-theme="light"] #banner{background:#fff!important;border-color:#cbd5dc!important;color:#17212a!important;box-shadow:0 16px 40px rgba(35,55,68,.18)!important}
+body[data-theme="light"] #loader{background:rgba(244,248,250,.92)!important;color:#17212a!important}
+body[data-theme="light"] .spinner{border-color:#cbd5dc!important;border-top-color:#1688ff!important}
+body[data-theme="light"] .leaflet-bar a,
+body[data-theme="light"] .view-ctl button{background:#fff!important;color:#344652!important;border-color:#cbd5dc!important}
+body[data-theme="light"] .leaflet-bar a:hover,
+body[data-theme="light"] .view-ctl button:hover{background:#e8f0f4!important;color:#0876dc!important}
+body[data-theme="light"] .leaflet-control-attribution{background:rgba(255,255,255,.82)!important;color:#657582!important}
+body[data-theme="light"] .leaflet-control-attribution a{color:#0876dc!important}
+body[data-theme="light"] .leaflet-control-scale-line{background:rgba(255,255,255,.82)!important;color:#344652!important;border-color:#7f929e!important}
+
+/* HUD layout fix: fixed columns prevent country text/percent overlap */
+#top{
+  left:50%!important;right:auto!important;top:14px!important;transform:translateX(-50%)!important;
+  width:min(900px,calc(100vw - 32px))!important;height:64px!important;padding:0 14px!important;gap:12px!important;
+}
+#top .logo{flex:0 0 145px!important;min-width:0!important}
+#top .score{width:auto!important;min-width:0!important;flex:1 1 auto!important;margin-left:0!important}
+#top .chips{width:100%!important;min-width:0!important;justify-content:flex-start!important;gap:8px!important;overflow-x:auto!important;scrollbar-width:none!important}
+#top .chip{min-width:0!important;flex:0 0 auto!important;padding:5px 8px!important}
+#top .chip .who{min-width:0!important}
+#top .chip .nm{overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}
+#top .chip .km{white-space:nowrap!important}
+#top .chip b{flex:none!important;min-width:45px!important;text-align:right!important}
+@media(max-width:850px){
+  #top{width:calc(100vw - 24px)!important;gap:8px!important;padding:0 10px!important}
+  #top .logo{flex:0 0 auto!important;min-width:0!important;padding-right:6px!important}
+  #themeToggle{height:34px!important;min-width:38px!important;width:38px!important;padding:0!important;border-radius:10px!important}
+  #themeToggle .themeLabel{display:none!important}
+  #themeToggle .themeIcon{font-size:16px!important}
+  #top .score{min-width:0!important;width:auto!important;flex:1 1 auto!important}
+  #top .chips{min-width:0!important;overflow-x:auto!important}
+}
+@media(max-width:560px){
+  #top{top:8px!important;height:54px!important}
+}
 </style>
 </head>
 
@@ -263,11 +479,15 @@ input[type=range]{width:100%;accent-color:var(--fc)}
 <div id="ring"></div>
 
 <div id="top">
-  <div class="logo">GEOFRONT</div>
+  <div class="logo">TERRACORE</div>
   <div class="score" aria-live="polite">
     <div class="chips" id="chips"></div>
     <div class="bar" id="bar" role="img" aria-label="Соотношение территорий"></div>
   </div>
+  <button id="themeToggle" type="button" aria-label="Переключить тему карты" aria-pressed="false" title="Светлая тема">
+    <span class="themeIcon" aria-hidden="true">☀</span>
+    <span class="themeLabel">Светлая</span>
+  </button>
 </div>
 
 <button id="panelToggle" aria-label="Закрыть меню" aria-expanded="true">×</button>
@@ -356,7 +576,7 @@ const BASE_COUNTRIES = [
   {iso:'UKR', name:'Украина', color:'#1688ff'},
   {iso:'RUS', name:'Россия',  color:'#f04455'}
 ];
-const PALETTE = ['#2fbf71','#f5a524','#a66bff','#19c2c2','#ff6bb5','#9acd32','#ff7a45','#5b6cff'];
+const PALETTE = ['#5b6cff','#f5a524','#a66bff','#19c2c2','#ff6bb5','#1688ff','#ff7a45','#5b6cff'];
 const MAX_COUNTRIES = 8;
 
 const MAX_HISTORY    = 40;
@@ -1803,6 +2023,35 @@ $('pickClose').addEventListener('click', closePicker);
 $('picker').addEventListener('click', e => { if(e.target === $('picker')) closePicker(); });
 $('pickSearch').addEventListener('input', renderPicker);
 
+/* =====================================================================
+   Тема карты — сохраняется между запусками
+   ===================================================================== */
+const THEME_KEY = 'terracore-theme';
+const themeToggle = $('themeToggle');
+
+function applyTheme(theme, save = true){
+  const light = theme === 'light';
+  document.body.dataset.theme = light ? 'light' : 'dark';
+  themeToggle.setAttribute('aria-pressed', String(light));
+  themeToggle.setAttribute('aria-label', light ? 'Включить тёмную тему' : 'Включить светлую тему');
+  themeToggle.title = light ? 'Тёмная тема' : 'Светлая тема';
+  themeToggle.querySelector('.themeIcon').textContent = light ? '☾' : '☀';
+  themeToggle.querySelector('.themeLabel').textContent = light ? 'Тёмная' : 'Светлая';
+  if(save){
+    try{ localStorage.setItem(THEME_KEY, light ? 'light' : 'dark'); }catch(_){}
+  }
+}
+
+let savedTheme = 'dark';
+try{
+  const v = localStorage.getItem(THEME_KEY);
+  if(v === 'light' || v === 'dark') savedTheme = v;
+}catch(_){}
+applyTheme(savedTheme, false);
+themeToggle.addEventListener('click', () => {
+  applyTheme(document.body.dataset.theme === 'light' ? 'dark' : 'light');
+});
+
 renderFactions();
 setTool('pan');
 setBrush(28);
@@ -1811,6 +2060,138 @@ setLog(innerWidth > 1100);
 renderLog();
 updateUI();
 init();
+</script>
+
+<!-- HUD editor -->
+<button id="hudEditToggle" type="button" aria-pressed="false" title="Настроить HUD">⚙ HUD</button>
+<div id="hudEditorBar" hidden>
+  <span>РЕЖИМ НАСТРОЙКИ HUD</span>
+  <button id="hudSave" type="button">Сохранить</button>
+  <button id="hudReset" type="button">Сбросить</button>
+  <button id="hudClose" type="button">Готово</button>
+</div>
+
+<style id="hud-editor-style">
+#hudEditToggle{position:fixed;right:18px;bottom:18px;z-index:1300;height:38px;padding:0 13px;border:1px solid #334553;border-radius:11px;background:rgba(9,16,23,.92);color:#b9c7d1;font:700 12px Inter,system-ui,sans-serif;letter-spacing:.04em;cursor:pointer;box-shadow:0 10px 30px rgba(0,0,0,.35);backdrop-filter:blur(12px)}
+#hudEditToggle:hover{border-color:#1688ff;color:#1688ff}
+#hudEditorBar{position:fixed;left:50%;top:18px;transform:translateX(-50%);z-index:1400;display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid rgba(22,136,255,.45);border-radius:12px;background:rgba(8,16,24,.96);box-shadow:0 14px 45px rgba(0,0,0,.5);backdrop-filter:blur(16px);color:#aebdc8;font:700 10px Inter,system-ui,sans-serif;letter-spacing:.12em;white-space:nowrap}
+#hudEditorBar[hidden]{display:none}
+#hudEditorBar button{height:30px;padding:0 10px;border:1px solid #334553;border-radius:8px;background:#121e28;color:#dbe5eb;font:700 11px Inter,system-ui,sans-serif;cursor:pointer}
+#hudEditorBar button:hover{border-color:#1688ff;color:#1688ff}
+body.hud-editing [data-hud-editable]{outline:1px dashed rgba(22,136,255,.9)!important;outline-offset:4px!important;cursor:move!important}
+body.hud-editing [data-hud-editable]::after{content:attr(data-hud-name);position:absolute;left:8px;top:-18px;padding:3px 6px;border-radius:5px;background:#1688ff;color:#fff;font:700 9px Inter,system-ui,sans-serif;letter-spacing:.06em;pointer-events:none;z-index:9999}
+.hud-resize-handle{position:absolute!important;right:-5px!important;bottom:-5px!important;width:14px!important;height:14px!important;border:2px solid #1688ff!important;border-radius:4px!important;background:#09131c!important;box-sizing:border-box!important;cursor:nwse-resize!important;z-index:10000!important}
+body.hud-dragging,body.hud-dragging *{user-select:none!important}
+@media(max-width:850px){
+ #hudEditToggle{right:12px;bottom:12px}
+ #hudEditorBar{top:8px;max-width:calc(100vw - 16px);overflow:auto}
+}
+</style>
+
+<script id="hud-editor-script">
+(()=>{
+  const EDIT_KEY='terracore-hud-layout-v1';
+  const editBtn=document.getElementById('hudEditToggle');
+  const bar=document.getElementById('hudEditorBar');
+  if(!editBtn||!bar) return;
+  const targets=[
+    ['top','Верхняя панель'],['panel','Панель стран'],['panelToggle','Кнопка панели'],
+    ['log','Журнал'],['logToggle','Кнопка журнала'],['toast','Уведомление'],['banner','Баннер']
+  ];
+  let editing=false, drag=null, resize=null;
+
+  function markTargets(){
+    targets.forEach(([id,name])=>{
+      const el=document.getElementById(id);
+      if(el){el.dataset.hudEditable='';el.dataset.hudName=name;}
+    });
+  }
+  function makeAbsolute(el){
+    const r=el.getBoundingClientRect();
+    el.style.setProperty('left',Math.round(r.left)+'px','important');
+    el.style.setProperty('top',Math.round(r.top)+'px','important');
+    el.style.setProperty('width',Math.round(r.width)+'px','important');
+    el.style.setProperty('height',Math.round(r.height)+'px','important');
+    el.style.setProperty('right','auto','important');
+    el.style.setProperty('bottom','auto','important');
+    el.style.setProperty('transform','none','important');
+  }
+  function clamp(el,left,top,w,h){
+    const maxW=innerWidth,maxH=innerHeight;
+    w=Math.max(28,Math.min(w,maxW)); h=Math.max(28,Math.min(h,maxH));
+    left=Math.max(4,Math.min(left,maxW-w-4)); top=Math.max(4,Math.min(top,maxH-h-4));
+    el.style.setProperty('left',Math.round(left)+'px','important');
+    el.style.setProperty('top',Math.round(top)+'px','important');
+    el.style.setProperty('width',Math.round(w)+'px','important');
+    el.style.setProperty('height',Math.round(h)+'px','important');
+  }
+  function addHandles(){
+    targets.forEach(([id])=>{
+      const el=document.getElementById(id); if(!el||el.querySelector('.hud-resize-handle')) return;
+      const h=document.createElement('span'); h.className='hud-resize-handle'; h.dataset.resizeFor=id; h.setAttribute('aria-label','Изменить размер'); el.appendChild(h);
+    });
+  }
+  function removeHandles(){document.querySelectorAll('.hud-resize-handle').forEach(x=>x.remove());}
+  function save(){
+    const data={};
+    targets.forEach(([id])=>{
+      const el=document.getElementById(id); if(!el) return;
+      const r=el.getBoundingClientRect(); data[id]={left:r.left,top:r.top,width:r.width,height:r.height};
+    });
+    try{localStorage.setItem(EDIT_KEY,JSON.stringify(data));}catch(_){}
+  }
+  function restore(){
+    let data=null; try{data=JSON.parse(localStorage.getItem(EDIT_KEY)||'null');}catch(_){}
+    if(!data) return;
+    targets.forEach(([id])=>{
+      const el=document.getElementById(id),v=data[id]; if(!el||!v) return;
+      clamp(el,Number(v.left)||0,Number(v.top)||0,Number(v.width)||el.offsetWidth,Number(v.height)||el.offsetHeight);
+    });
+  }
+  function reset(){
+    try{localStorage.removeItem(EDIT_KEY);}catch(_){}
+    location.reload();
+  }
+  function startEdit(){
+    editing=true; document.body.classList.add('hud-editing'); editBtn.setAttribute('aria-pressed','true'); editBtn.hidden=true; bar.hidden=false;
+    targets.forEach(([id])=>{const el=document.getElementById(id);if(el) makeAbsolute(el);});
+    addHandles();
+  }
+  function stopEdit(){
+    save(); editing=false; document.body.classList.remove('hud-editing'); editBtn.setAttribute('aria-pressed','false'); editBtn.hidden=false; bar.hidden=true; removeHandles();
+  }
+  function point(e){return {x:e.clientX,y:e.clientY};}
+  document.addEventListener('pointerdown',e=>{
+    if(!editing) return;
+    const handle=e.target.closest('.hud-resize-handle');
+    if(handle){
+      const el=document.getElementById(handle.dataset.resizeFor); if(!el) return;
+      const r=el.getBoundingClientRect(); const p=point(e); resize={el,startX:p.x,startY:p.y,w:r.width,h:r.height}; e.preventDefault(); e.stopPropagation(); el.setPointerCapture?.(e.pointerId); return;
+    }
+    const el=e.target.closest('[data-hud-editable]');
+    if(!el||e.target.closest('#hudEditorBar')||e.target.closest('#hudEditToggle')) return;
+    const r=el.getBoundingClientRect(),p=point(e); drag={el,dx:p.x-r.left,dy:p.y-r.top}; document.body.classList.add('hud-dragging'); e.preventDefault(); e.stopPropagation();
+  },true);
+  document.addEventListener('pointermove',e=>{
+    if(resize){
+      const dx=e.clientX-resize.startX,dy=e.clientY-resize.startY; const r=resize.el.getBoundingClientRect(); clamp(resize.el,r.left,r.top,resize.w+dx,resize.h+dy); e.preventDefault(); return;
+    }
+    if(drag){
+      const r=drag.el.getBoundingClientRect(); clamp(drag.el,e.clientX-drag.dx,e.clientY-drag.dy,r.width,r.height); e.preventDefault();
+    }
+  },true);
+  document.addEventListener('pointerup',()=>{if(drag||resize) save();drag=null;resize=null;document.body.classList.remove('hud-dragging');},true);
+  document.addEventListener('click',e=>{
+    if(!editing) return;
+    if(e.target.closest('[data-hud-editable]')&&!e.target.closest('.hud-resize-handle')){e.preventDefault();e.stopImmediatePropagation();}
+  },true);
+  editBtn.addEventListener('click',startEdit);
+  document.getElementById('hudSave').addEventListener('click',save);
+  document.getElementById('hudReset').addEventListener('click',reset);
+  document.getElementById('hudClose').addEventListener('click',stopEdit);
+  markTargets();
+  restore();
+})();
 </script>
 </body>
 </html>
