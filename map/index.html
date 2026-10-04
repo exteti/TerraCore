@@ -82,12 +82,14 @@ body.busy .leaflet-container{cursor:progress}
 #panel{
   position:fixed;z-index:1104;left:var(--gap);
   top:calc(var(--gap)*2 + var(--topH) + 52px);
-  width:244px;max-height:calc(100% - var(--gap)*3 - var(--topH) - 52px - 8px);overflow:auto;
+  width:244px;height:fit-content;max-height:calc(100% - var(--gap)*3 - var(--topH) - 52px - 8px);
+  overflow-x:hidden;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none;
   padding:14px;border:1px solid var(--line);border-radius:16px;
   background:var(--panel);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
   box-shadow:0 16px 40px rgba(0,0,0,.48);
   transition:transform .2s ease,opacity .2s ease;
 }
+#panel::-webkit-scrollbar{display:none}
 #panel.closed{transform:translateX(-115%);opacity:0;pointer-events:none}
 .title{font-size:12px;font-weight:600;color:var(--mute);margin:0 0 9px}
 .sep{height:1px;background:var(--line);margin:14px 0}
