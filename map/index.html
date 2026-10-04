@@ -985,10 +985,12 @@ async function capture(shape){
 /* =====================================================================
    Журнал захватов: кто, сколько и какие населённые пункты
    ===================================================================== */
-const OVERPASS = [                        // запрашиваем оба зеркала сразу, берём первый ответ
+const OVERPASS = [
   'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter'
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter'
 ];
+let overpassCursor = 0;
 const OSM_TIMEOUT_MS = 20000;            // дольше не ждём — не оставляем «вечный» поиск
 const LOCAL_TIMEOUT_MS = 30000;
 const POP_CACHE_KEY = 'places-ne10-v1';
@@ -1158,39 +1160,43 @@ function overpassAreaFilter(geom){
 // Запросы к Overpass идут через GET и разбиваются на небольшие квадраты.
 // POST у некоторых браузеров/зеркал режется CORS, из-за чего журнал раньше
 // показывал «не удалось определить».
-async function fetchOverpass(url, query){
-  const target = url + '?data=' + encodeURIComponent(query);
-  const candidates = [
-    target,
-    'https://api.allorigins.win/raw?url=' + encodeURIComponent(target),
-    'https://corsproxy.io/?url=' + encodeURIComponent(target)
-  ];
-  let lastErr = null;
-  for(const requestUrl of candidates){
+async function fetchOverpass(query){
+  const firstServer = overpassCursor;
+  overpassCursor = (overpassCursor + 1) % OVERPASS.length;
+  const errors = [];
+
+  for(let attempt = 0; attempt < OVERPASS.length; attempt++){
+    const url = OVERPASS[(firstServer + attempt) % OVERPASS.length];
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), OSM_TIMEOUT_MS);
     try{
-      const r = await fetch(requestUrl, {
+      const r = await fetch(url + '?data=' + encodeURIComponent(query), {
         method:'GET', signal:ctl.signal,
         headers:{'Accept':'application/json'}
       });
-      if(!r.ok) throw new Error(requestUrl + ' → HTTP ' + r.status);
-      const text = await r.text();
-      let j;
-      try{ j = JSON.parse(text); }catch(_){
-        throw new Error('Overpass вернул не JSON');
+      if(!r.ok) throw new Error('HTTP ' + r.status);
+
+      let data;
+      try{ data = await r.json(); }catch(_){
+        throw new Error('Сервер вернул некорректный JSON');
       }
-      if(j.remark && /(error|timed out|out of memory)/i.test(j.remark) && !(j.elements || []).length)
-        throw new Error(j.remark);
-      return j;
+      if(!data || !Array.isArray(data.elements))
+        throw new Error('Ответ Overpass не содержит массива elements');
+      if(data.remark && /(error|timed out|out of memory)/i.test(data.remark) && !data.elements.length)
+        throw new Error(data.remark);
+      return data;
     }catch(err){
-      lastErr = err;
-      console.warn('Overpass endpoint failed:', requestUrl, err);
+      const message = err.name === 'AbortError'
+        ? 'таймаут после ' + OSM_TIMEOUT_MS + ' мс'
+        : (err.message || 'неизвестная ошибка');
+      errors.push(url + ': ' + message);
+      console.warn('Overpass endpoint failed:', url, err);
     }finally{
       clearTimeout(timer);
     }
   }
-  throw lastErr || new Error('Не удалось получить данные Overpass');
+
+  throw new Error('Все серверы Overpass недоступны. ' + errors.join('; '));
 }
 
 async function fetchOsmPlaces(geom){
@@ -1213,16 +1219,14 @@ async function fetchOsmPlaces(geom){
 
   const sel = '["place"~"^(city|town|village|hamlet|isolated_dwelling|locality)$"]';
   const tasks = [];
-  for(const url of OVERPASS){
-    for(const [x1,y1,x2,y2] of boxes){
-      const query = '[out:json][timeout:15];node' + sel + '(' +
-        y1.toFixed(5) + ',' + x1.toFixed(5) + ',' + y2.toFixed(5) + ',' + x2.toFixed(5) +
-        ');out body;';
-      tasks.push(fetchOverpass(url, query).catch(err => {
-        console.warn('Overpass:', err);
-        return null;
-      }));
-    }
+  for(const [x1,y1,x2,y2] of boxes){
+    const query = '[out:json][timeout:15];node' + sel + '(' +
+      y1.toFixed(5) + ',' + x1.toFixed(5) + ',' + y2.toFixed(5) + ',' + x2.toFixed(5) +
+      ');out body;';
+    tasks.push(fetchOverpass(query).catch(err => {
+      console.warn('Overpass:', err);
+      return null;
+    }));
   }
 
   const results = await Promise.all(tasks);
